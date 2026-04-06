@@ -3,7 +3,7 @@
 > 📅 学习日期：2026-03-20  
 > 📚 阶段：阶段 1 - AI 编译器入门  
 > ⏱️ 预计耗时：2 周  
-> 💻 平台：macOS + Python 3.11（CPU + MPS GPU）  
+> 💻 平台：macOS + Python 3.11（PyTorch: CPU + MPS，TVM: CPU）  
 > 🔗 前置：[01-AI 编译器入门](./01-ai-compiler-intro.md), [02-MLIR 深入](./02-mlir-deep-dive.md)
 
 ---
@@ -13,7 +13,7 @@
 学完这篇，你应该能：
 
 1. 理解 **计算图优化的核心技术和收益**
-2. 用 TVM 编译模型到 **CPU/MPS** 后端
+2. 用 TVM 编译模型到 **CPU** 后端，并理解 macOS 上 Metal 需要单独编译支持
 3. 用 `torch.compile` 优化真实模型并 **量化性能**
 4. 使用 **性能分析工具** 找到瓶颈
 5. 手写一个简单的 **算子融合** 示例
@@ -55,32 +55,47 @@
 
 ## 🔧 实践 1：环境准备（macOS + Python 3.11）
 
-### 创建虚拟环境
+> ⚠️ 结合当前这台机器的实际环境：
+> - PyTorch 可以使用 `CPU + MPS`
+> - TVM 已通过**源码编译**安装到 `py11` 环境
+> - 当前这套 TVM 构建**没有启用 Metal**，因此 TVM 实践默认走 `CPU/LLVM`
+> - `pip install apache-tvm -U` 在这台机器上不可用，不要再使用这个命令
+
+### 使用当前 conda 环境
 
 ```bash
-# 创建虚拟环境
-python3.11 -m venv ai-compiler-env
-source ai-compiler-env/bin/activate
+# 当前笔记默认直接复用已配置好的环境
+conda activate py11
 
 # 升级 pip
-pip install --upgrade pip
+python -m pip install --upgrade pip
 ```
 
 ### 安装核心依赖
 
 ```bash
 # PyTorch (支持 MPS GPU)
-pip install torch torchvision torchaudio
+python -m pip install torch torchvision torchaudio
 
-# TVM (用预编译版本，macOS 支持)
-pip install apache-tvm -U
+# TVM
+# 当前环境中的 TVM 已通过源码安装完成，这里只做验证，不再重复安装
+python -c "import tvm; print(tvm.__version__)"
 
 # 性能分析工具
-pip install psutil memory_profiler
+python -m pip install psutil memory_profiler
 
 # 可选：ONNX 运行时
-pip install onnxruntime
+python -m pip install onnxruntime
 ```
+
+如果你是在一台新的 Apple Silicon Mac 上重新搭环境，请记住：
+
+```bash
+# 不要使用这个命令，当前平台/版本组合通常会失败
+pip install apache-tvm -U
+```
+
+应该改用 **TVM 源码编译**。
 
 ### 验证安装
 
@@ -93,6 +108,7 @@ import platform
 print(f"Python: {platform.python_version()}")
 print(f"PyTorch: {torch.__version__}")
 print(f"TVM: {tvm.__version__}")
+print(f"TVM LLVM: {tvm.support.libinfo()['LLVM_VERSION']}")
 print(f"CUDA 可用：{torch.cuda.is_available()}")
 print(f"MPS 可用：{torch.backends.mps.is_available()}")
 
@@ -117,7 +133,8 @@ python test_env.py
 ```
 Python: 3.11.x
 PyTorch: 2.x.x
-TVM: 0.x.x
+TVM: 0.23.0
+TVM LLVM: 18.1.8
 CUDA 可用：False
 MPS 可用：True
 MPS 测试：tensor([[1., 1., 1.],
@@ -157,8 +174,11 @@ model = SimpleNet().to(device)
 x = torch.randn(32, 128, device=device)
 
 # 🔥 编译模型
+# 在 macOS + MPS 上，reduce-overhead 一般比 max-autotune 更稳
 print("编译模型...")
-compiled_model = torch.compile(model, mode="max-autotune")
+compile_mode = "reduce-overhead" if device.type == "mps" else "max-autotune"
+compiled_model = torch.compile(model, mode=compile_mode)
+print(f"编译模式：{compile_mode}")
 
 # 预热（第一次运行包含编译）
 print("预热运行...")
@@ -197,6 +217,7 @@ python torch_compile_basic.py
 
 ```
 编译模型...
+编译模式：reduce-overhead
 预热运行...
 
 性能测试（100 次平均）：
@@ -246,20 +267,20 @@ x = torch.randn(8, 64)
 result1 = compiled(x, use_skip=False)
 stats1 = dynamo.explain(compiled)(x, use_skip=False)
 print("\n情况 1 (use_skip=False):")
-print(f"图捕获：{stats1['graph_count']} 个图")
-print(f"图断点：{stats1['graph_break_count']} 个")
+print(f"图捕获：{stats1.graph_count} 个图")
+print(f"图断点：{stats1.graph_break_count} 个")
 
 # 情况 2：使用 skip（可能触发重新编译）
 result2 = compiled(x, use_skip=True)
 stats2 = dynamo.explain(compiled)(x, use_skip=True)
 print(f"\n情况 2 (use_skip=True):")
-print(f"图捕获：{stats2['graph_count']} 个图")
-print(f"图断点：{stats2['graph_break_count']} 个")
+print(f"图捕获：{stats2.graph_count} 个图")
+print(f"图断点：{stats2.graph_break_count} 个")
 
 # 查看编译后的图
 print("\n" + "=" * 50)
 print("编译后的计算图（简化）：")
-print(dynamo.explain(compiled)(x, use_skip=False)['graphs'][0])
+print(stats1.graphs[0])
 ```
 
 **输出示例**：
@@ -290,23 +311,28 @@ graph():
 
 ---
 
-## 🔧 实践 3：TVM 端到端编译
+## 🔧 实践 3：TVM 端到端编译（CPU）
 
-### TVM 编译 ResNet-18
+> 说明：当前这台机器里的 TVM 是 `LLVM CPU` 构建，`tvm.metal().exist == False`。
+> 所以下面的实战默认只演示 `CPU` 路径；如果想跑 `Metal`，需要单独重新编译 TVM 并启用对应后端。
+
+### TVM 编译 ResNet-18（LLVM CPU）
 
 ```python
 # tvm_resnet_compile.py
 import tvm
 from tvm import relay
+from tvm.contrib import graph_executor
 import torch
 import time
+from torchvision import models
 
-print("TVM 编译 ResNet-18 到 CPU/MPS")
+print("TVM 编译 ResNet-18 到 CPU")
 print("=" * 50)
 
 # 1. 加载 PyTorch 模型
 print("\n1. 加载 PyTorch ResNet-18...")
-model = torch.models.resnet18(weights=None)
+model = models.resnet18(weights=None)
 model.eval()
 
 # 创建示例输入
@@ -322,9 +348,8 @@ print("3. 转换为 Relay IR...")
 mod, params = relay.frontend.from_pytorch(scripted_model, [("input0", input_shape)])
 
 # 4. 配置编译目标
-# macOS: 用 llvm (CPU) 或 metal (GPU)
+# Apple Silicon CPU 目标
 target = tvm.target.Target("llvm -mcpu=apple-m1")  # CPU 优化
-# target = tvm.target.Target("metal")  # GPU (需要 TVM 支持 Metal)
 
 print(f"4. 编译到目标：{target}")
 
@@ -338,8 +363,7 @@ print("✅ 编译完成！")
 # 6. 创建运行时
 print("\n6. 创建运行时...")
 dev = tvm.cpu(0)  # CPU
-# dev = tvm.metal(0)  # GPU (如果编译目标为 metal)
-module = tvm.contrib.graph_executor.GraphModule(lib["default"](dev))
+module = graph_executor.GraphModule(lib["default"](dev))
 
 # 7. 性能对比
 def benchmark_tvm(module, input_data, runs=10):
@@ -404,7 +428,7 @@ python tvm_resnet_compile.py
 **预期输出**（M1 Pro 实测）：
 
 ```
-TVM 编译 ResNet-18 到 CPU/MPS
+TVM 编译 ResNet-18 到 CPU
 ==================================================
 
 1. 加载 PyTorch ResNet-18...
@@ -437,9 +461,10 @@ TVM 编译后：42.15 ms
 # operator_fusion_demo.py
 import torch
 import time
+from copy import deepcopy
 
-# ===== 未融合的版本 =====
-class UnfusedModel(torch.nn.Module):
+# ===== 基础模型：Conv + BN + ReLU =====
+class ConvBnRelu(torch.nn.Module):
     def __init__(self):
         super().__init__()
         self.conv = torch.nn.Conv2d(64, 64, 3, padding=1)
@@ -452,38 +477,18 @@ class UnfusedModel(torch.nn.Module):
         x = self.relu(x)      # 读 + 写内存
         return x
 
-# ===== 融合的版本 =====
 class FusedModel(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, base_model: ConvBnRelu):
         super().__init__()
-        # 融合 Conv + BN 到单个 Conv
-        conv = torch.nn.Conv2d(64, 64, 3, padding=1)
-        bn = torch.nn.BatchNorm2d(64)
-        
-        # 融合 BN 到 Conv 的权重和偏置
-        # y = BN(conv(x)) = gamma * (conv(x) - mean) / sqrt(var + eps) + beta
-        #   = (gamma / sqrt(var + eps)) * conv(x) + (beta - gamma * mean / sqrt(var + eps))
-        #   = weight_new * x + bias_new
-        
-        with torch.no_grad():
-            std = torch.sqrt(bn.running_var + bn.eps)
-            # 融合权重
-            fused_weight = conv.weight * (bn.weight / std).view(64, 1, 1, 1)
-            # 融合偏置
-            if conv.bias is not None:
-                fused_bias = (conv.bias - bn.running_mean) * (bn.weight / std) + bn.bias
-            else:
-                fused_bias = -bn.running_mean * (bn.weight / std) + bn.bias
-        
-        # 创建融合的 Conv
-        self.fused_conv = torch.nn.Conv2d(64, 64, 3, padding=1)
-        self.fused_conv.weight = torch.nn.Parameter(fused_weight)
-        self.fused_conv.bias = torch.nn.Parameter(fused_bias)
-        self.relu = torch.nn.ReLU()
+        fused_base = deepcopy(base_model).eval()
+        self.fused_conv = torch.nn.utils.fusion.fuse_conv_bn_eval(
+            fused_base.conv, fused_base.bn
+        )
+        self.relu = fused_base.relu
     
     def forward(self, x):
-        x = self.fused_conv(x)  # 一次内存写
-        x = self.relu(x)        # 一次内存写
+        x = self.fused_conv(x)  # Conv + BN 已融合
+        x = self.relu(x)
         return x
 
 # 性能对比
@@ -492,11 +497,15 @@ def benchmark(model, x, runs=100):
     with torch.no_grad():
         # 预热
         _ = model(x)
+        if x.device.type == "mps":
+            torch.mps.synchronize()
         
         # 测试
         start = time.time()
         for _ in range(runs):
             _ = model(x)
+        if x.device.type == "mps":
+            torch.mps.synchronize()
         end = time.time()
         
         return (end - start) / runs * 1000
@@ -505,13 +514,8 @@ def benchmark(model, x, runs=100):
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 x = torch.randn(32, 64, 56, 56, device=device)
 
-unfused = UnfusedModel().to(device)
-fused = FusedModel().to(device)
-
-# 复制权重确保公平比较
-with torch.no_grad():
-    fused.fused_conv.weight.copy_(unfused.conv.weight)
-    fused.fused_conv.bias.copy_(unfused.conv.bias)
+unfused = ConvBnRelu().eval().to(device)
+fused = FusedModel(unfused).to(device)
 
 print("算子融合性能对比（100 次平均）：")
 print("=" * 50)
@@ -558,6 +562,9 @@ python operator_fusion_demo.py
 
 ### 使用 PyTorch Profiler
 
+> 注意：当前 `py11` 环境中的 PyTorch 版本支持 MPS 推理，但 `torch.profiler.ProfilerActivity`
+> 里**没有** `MPS` 选项，因此下面代码采用“优先记录 CPU，若后续环境支持 MPS 再自动追加”的写法。
+
 ```python
 # profile_model.py
 import torch
@@ -591,8 +598,12 @@ x = torch.randn(16, 64, 56, 56, device=device)
 
 # 🔥 性能分析
 print("开始性能分析...")
+activities = [ProfilerActivity.CPU]
+if hasattr(ProfilerActivity, "MPS") and torch.backends.mps.is_available():
+    activities.append(ProfilerActivity.MPS)
+
 with profile(
-    activities=[ProfilerActivity.CPU, ProfilerActivity.MPS],
+    activities=activities,
     record_shapes=True,
     profile_memory=True,
     with_stack=True
@@ -685,7 +696,7 @@ print("\n✅ 内存分析完成（查看上面的输出）")
 **运行**：
 
 ```bash
-pip install memory_profiler
+python -m pip install memory_profiler
 python -m memory_profiler memory_profile.py
 ```
 
@@ -737,9 +748,9 @@ python -m memory_profiler memory_profile.py
 - 第一次编译确实慢（1-5 分钟）
 - 保存编译产物，下次直接加载：
   ```python
-    lib.export_library("compiled_model.so")
+    lib.export_library("compiled_model.dylib")
     # 下次加载
-    lib = tvm.runtime.load_module("compiled_model.so")
+    lib = tvm.runtime.load_module("compiled_model.dylib")
     ```
 - 用 `opt_level=3` 平衡编译时间和性能
 
@@ -760,6 +771,10 @@ python -m memory_profiler memory_profile.py
 ### Q4: MPS vs CPU，选哪个？
 
 **A**: 
+对于这篇笔记当前的实际环境，需要分成两种情况理解：
+- **PyTorch**：可以在 `CPU` 和 `MPS` 之间切换
+- **TVM**：当前安装的是 `LLVM CPU` 版本，不走 `MPS/Metal`
+
 | 场景 | 推荐 | 原因 |
 |------|------|------|
 | 大模型推理 | MPS | GPU 并行优势 |
@@ -773,7 +788,8 @@ python -m memory_profiler memory_profile.py
 
 ### 必做（核心）
 
-- [ ] 安装 TVM 和 PyTorch，验证环境
+- [ ] 在 `py11` 中验证 PyTorch 和源码编译版 TVM 环境
+- [ ] 确认 `py11` 中的 TVM 为源码编译版本（不要使用 `pip install apache-tvm -U`）
 - [ ] 跑通 `torch_compile_basic.py`，记录性能数据
 - [ ] 跑通 `operator_fusion_demo.py`，理解融合原理
 - [ ] 用 PyTorch Profiler 分析一个模型
@@ -809,5 +825,5 @@ python -m memory_profiler memory_profile.py
 
 _笔记创建：2026-03-20_  
 _适合人群：Java 应用开发背景，AI 编译器零基础_  
-_平台：macOS + Python 3.11（CPU + MPS GPU）_  
+_平台：macOS + Python 3.11（PyTorch: CPU + MPS，TVM: CPU）_  
 _难度：⭐⭐⭐（大量可运行代码）_

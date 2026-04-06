@@ -3,7 +3,7 @@
 > 📅 学习日期：2026-03-20  
 > 📚 阶段：阶段 1 - AI 编译器入门  
 > ⏱️ 预计耗时：2-3 周  
-> 💻 平台：macOS + Python 3.11（CPU 优化）  
+> 💻 平台：macOS + Python 3.11（TVM TE/TIR 调度，CPU 优化）  
 > 🔗 前置：[03-计算图优化实战](./03-compute-graph-optimization.md)
 
 ---
@@ -13,10 +13,10 @@
 学完这篇，你应该能：
 
 1. 理解 **TVM 调度的核心概念和优化技巧**
-2. 用 **AutoTVM** 自动搜索最优调度
+2. 用**轻量参数搜索**自动探索较优调度，并理解它和 AutoTVM/MetaSchedule 的关系
 3. 手写 **矩阵乘法优化**（分块、并行、向量化）
 4. 理解 **内存层次和缓存优化**
-5. 用 TVM 编译 **端到端模型** 并分析性能
+5. 判断当前环境是否适合做 **端到端模型编译**，并把重点放在可运行的调度实验上
 
 ---
 
@@ -75,7 +75,7 @@ TVM 调度优化
 | 分块 (Tiling) | 45ms | 22ms | **2.0x** |
 | 分块 + 并行 | 45ms | 8ms | **5.6x** |
 | 分块 + 并行 + 向量化 | 45ms | 5ms | **9.0x** |
-| AutoTVM 自动搜索 | 45ms | 4ms | **11.2x** |
+| 轻量参数搜索 | 45ms | 4-8ms | **5-11x** |
 
 ---
 
@@ -84,12 +84,17 @@ TVM 调度优化
 ### 环境准备
 
 ```bash
-# 确保 TVM 已安装
-pip install apache-tvm -U
+# 当前笔记默认复用已经配置好的环境
+conda activate py11
 
 # 验证安装
 python -c "import tvm; print(f'TVM {tvm.__version__}')"
+python -c "import tvm; print('te=', hasattr(tvm, 'te'), 'tir=', hasattr(tvm, 'tir'), 'meta_schedule=', hasattr(tvm, 'meta_schedule'))"
 ```
+
+> ⚠️ 当前这台机器上的 TVM 是源码编译版，适合做 `TE/TIR + LLVM CPU` 调度实验。
+> 不要使用 `pip install apache-tvm -U`，这个命令在当前平台/版本组合下通常不可用。
+> 同时，这套 TVM 当前**没有** `autotvm` 和 `relay`，所以下面的实践会避开这两个不可用模块。
 
 ### 第一个调度示例：向量加法
 
@@ -109,23 +114,25 @@ A = te.placeholder((N,), name='A')
 B = te.placeholder((N,), name='B')
 C = te.compute((N,), lambda i: A[i] + B[i], name='C')
 
-# 2. 创建调度
-s = te.create_schedule(C.op)
+# 2. 从 TE 生成 PrimFunc（当前 TVM 版本推荐入口）
+func = te.create_prim_func([A, B, C])
 
-# 3. 查看默认调度生成的代码
+# 3. 查看默认 TIR
 print("\n1. 默认调度（无优化）：")
-print(tvm.lower(s, [A, B, C], simple_mode=True)[:500])
+print(str(func)[:500])
 
-# 4. 编译和执行
-def benchmark(schedule, name):
+def benchmark(obj, name):
     # 编译
-    f = tvm.build(schedule, [A, B, C], target='llvm -mcpu=apple-m1', name=name)
+    if isinstance(obj, tvm.tir.Schedule):
+        rt_mod = tvm.build(obj.mod["main"], target='llvm -mcpu=apple-m1', name=name)
+    else:
+        rt_mod = tvm.build(obj, target='llvm -mcpu=apple-m1', name=name)
+    f = rt_mod["main"]
     
     # 准备数据
-    ctx = tvm.cpu(0)
-    a = tvm.nd.array(np.random.rand(N).astype('float32'), ctx)
-    b = tvm.nd.array(np.random.rand(N).astype('float32'), ctx)
-    c = tvm.nd.array(np.zeros(N, dtype='float32'), ctx)
+    a = np.random.rand(N).astype('float32')
+    b = np.random.rand(N).astype('float32')
+    c = np.zeros(N, dtype='float32')
     
     # 预热
     f(a, b, c)
@@ -139,23 +146,27 @@ def benchmark(schedule, name):
     return (end - start) / 10 * 1000  # 毫秒
 
 # 基准测试
-default_time = benchmark(s, "default")
+default_time = benchmark(func, "default")
 print(f"\n默认调度耗时：{default_time:.2f} ms")
 
 # 5. 应用优化：并行化
-s_parallel = te.create_schedule(C.op)
-s_parallel[C].parallel(C.op.axis[0])
+sch_parallel = tvm.tir.Schedule(func)
+block = sch_parallel.get_block("C")
+i = sch_parallel.get_loops(block)[0]
+sch_parallel.parallel(i)
 
-parallel_time = benchmark(s_parallel, "parallel")
+parallel_time = benchmark(sch_parallel, "parallel")
 print(f"并行优化耗时：{parallel_time:.2f} ms")
 print(f"加速比：{default_time / parallel_time:.2f}x")
 
 # 6. 应用优化：分块 + 并行
-s_tiled = te.create_schedule(C.op)
-xo, xi = s_tiled[C].split(C.op.axis[0], factor=256)
-s_tiled[C].parallel(xo)
+sch_tiled = tvm.tir.Schedule(func)
+block = sch_tiled.get_block("C")
+i = sch_tiled.get_loops(block)[0]
+io, ii = sch_tiled.split(i, factors=[None, 256])
+sch_tiled.parallel(io)
 
-tiled_time = benchmark(s_tiled, "tiled")
+tiled_time = benchmark(sch_tiled, "tiled")
 print(f"分块 + 并行耗时：{tiled_time:.2f} ms")
 print(f"加速比：{default_time / tiled_time:.2f}x")
 
@@ -213,15 +224,19 @@ A = te.placeholder((M, K), name='A')
 B = te.placeholder((K, N), name='B')
 k = te.reduce_axis((0, K), 'k')
 C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name='C')
+func = te.create_prim_func([A, B, C])
 
-def benchmark(schedule, name):
+def benchmark(obj, name):
     """性能测试"""
-    f = tvm.build(schedule, [A, B, C], target='llvm -mcpu=apple-m1', name=name)
+    if isinstance(obj, tvm.tir.Schedule):
+        rt_mod = tvm.build(obj.mod["main"], target='llvm -mcpu=apple-m1', name=name)
+    else:
+        rt_mod = tvm.build(obj, target='llvm -mcpu=apple-m1', name=name)
+    f = rt_mod["main"]
     
-    ctx = tvm.cpu(0)
-    a = tvm.nd.array(np.random.rand(M, K).astype('float32'), ctx)
-    b = tvm.nd.array(np.random.rand(K, N).astype('float32'), ctx)
-    c = tvm.nd.array(np.zeros((M, N), dtype='float32'), ctx)
+    a = np.random.rand(M, K).astype('float32')
+    b = np.random.rand(K, N).astype('float32')
+    c = np.zeros((M, N), dtype='float32')
     
     # 预热
     f(a, b, c)
@@ -236,46 +251,61 @@ def benchmark(schedule, name):
 
 # ===== 优化 1: 基础版本 =====
 print("\n1. 基础版本（无优化）")
-s0 = te.create_schedule(C.op)
-time0 = benchmark(s0, "base")
+time0 = benchmark(func, "base")
 print(f"   耗时：{time0:.2f} ms")
 
 # ===== 优化 2: 分块 (Tiling) =====
 print("\n2. 分块优化 (Tiling)")
-s1 = te.create_schedule(C.op)
-xo, yo, xi, yi = s1[C].tile(C.op.axis[0], C.op.axis[1], 32, 32)
-time1 = benchmark(s1, "tiling")
+sch1 = tvm.tir.Schedule(func)
+block = sch1.get_block("C")
+i, j, k_loop = sch1.get_loops(block)
+i0, i1 = sch1.split(i, factors=[None, 32])
+j0, j1 = sch1.split(j, factors=[None, 32])
+sch1.reorder(i0, j0, i1, j1, k_loop)
+time1 = benchmark(sch1, "tiling")
 print(f"   耗时：{time1:.2f} ms")
 print(f"   加速比：{time0 / time1:.2f}x")
 
 # ===== 优化 3: 分块 + 并行 =====
 print("\n3. 分块 + 并行 (Tiling + Parallel)")
-s2 = te.create_schedule(C.op)
-xo, yo, xi, yi = s2[C].tile(C.op.axis[0], C.op.axis[1], 32, 32)
-s2[C].parallel(xo)
-time2 = benchmark(s2, "tiling_parallel")
+sch2 = tvm.tir.Schedule(func)
+block = sch2.get_block("C")
+i, j, k_loop = sch2.get_loops(block)
+i0, i1 = sch2.split(i, factors=[None, 32])
+j0, j1 = sch2.split(j, factors=[None, 32])
+sch2.reorder(i0, j0, i1, j1, k_loop)
+sch2.parallel(i0)
+time2 = benchmark(sch2, "tiling_parallel")
 print(f"   耗时：{time2:.2f} ms")
 print(f"   加速比：{time0 / time2:.2f}x")
 
 # ===== 优化 4: 分块 + 并行 + 向量化 =====
 print("\n4. 分块 + 并行 + 向量化 (Tiling + Parallel + Vectorize)")
-s3 = te.create_schedule(C.op)
-xo, yo, xi, yi = s3[C].tile(C.op.axis[0], C.op.axis[1], 32, 32)
-s3[C].parallel(xo)
-s3[C].vectorize(yi)
-time3 = benchmark(s3, "tiling_parallel_vectorize")
+sch3 = tvm.tir.Schedule(func)
+block = sch3.get_block("C")
+i, j, k_loop = sch3.get_loops(block)
+i0, i1 = sch3.split(i, factors=[None, 32])
+j0, j1 = sch3.split(j, factors=[None, 32])
+sch3.reorder(i0, j0, i1, j1, k_loop)
+sch3.parallel(i0)
+sch3.vectorize(j1)
+time3 = benchmark(sch3, "tiling_parallel_vectorize")
 print(f"   耗时：{time3:.2f} ms")
 print(f"   加速比：{time0 / time3:.2f}x")
 
-# ===== 优化 5: 分块 + 重排序 + 并行 + 向量化 =====
-print("\n5. 完整优化 (Tiling + Reorder + Parallel + Vectorize)")
-s4 = te.create_schedule(C.op)
-xo, yo, xi, yi = s4[C].tile(C.op.axis[0], C.op.axis[1], 32, 32)
-# 重排序：让并行在外层，向量化在内层
-s4[C].reorder(xo, yo, xi, yi)
-s4[C].parallel(xo)
-s4[C].vectorize(yi)
-time4 = benchmark(s4, "full_opt")
+# ===== 优化 5: 分块 + 重排序 + 并行 + 向量化 + 展开 =====
+print("\n5. 完整优化 (Tiling + Reorder + Parallel + Vectorize + Unroll)")
+sch4 = tvm.tir.Schedule(func)
+block = sch4.get_block("C")
+i, j, k_loop = sch4.get_loops(block)
+i0, i1 = sch4.split(i, factors=[None, 32])
+j0, j1 = sch4.split(j, factors=[None, 32])
+# 重排序：并行在外层，向量化在最内层
+sch4.reorder(i0, j0, i1, j1, k_loop)
+sch4.parallel(i0)
+sch4.vectorize(j1)
+sch4.unroll(i1)
+time4 = benchmark(sch4, "full_opt")
 print(f"   耗时：{time4:.2f} ms")
 print(f"   加速比：{time0 / time4:.2f}x")
 
@@ -283,22 +313,22 @@ print(f"   加速比：{time0 / time4:.2f}x")
 print("\n" + "=" * 70)
 print("生成的代码片段（优化版本 5）：")
 print("=" * 70)
-print(tvm.lower(s4, [A, B, C], simple_mode=True)[:1000])
+print(sch4.mod.script()[:1000])
 
 # 验证正确性
 print("\n" + "=" * 70)
 print("验证正确性：")
-ctx = tvm.cpu(0)
-a = tvm.nd.array(np.random.rand(M, K).astype('float32'), ctx)
-b = tvm.nd.array(np.random.rand(K, N).astype('float32'), ctx)
-c_tvm = tvm.nd.array(np.zeros((M, N), dtype='float32'), ctx)
+a = np.random.rand(M, K).astype('float32')
+b = np.random.rand(K, N).astype('float32')
+c_tvm = np.zeros((M, N), dtype='float32')
 
-f_opt = tvm.build(s4, [A, B, C], target='llvm -mcpu=apple-m1')
+rt_mod = tvm.build(sch4.mod["main"], target='llvm -mcpu=apple-m1')
+f_opt = rt_mod["main"]
 f_opt(a, b, c_tvm)
 
 # NumPy 参考实现
-c_np = np.dot(a.numpy(), b.numpy())
-diff = abs(c_tvm.numpy() - c_np).max()
+c_np = np.dot(a, b)
+diff = abs(c_tvm - c_np).max()
 print(f"与 NumPy 最大差异：{diff:.6f}")
 print("✅ 结果正确！" if diff < 1e-4 else "❌ 结果不一致")
 ```
@@ -352,338 +382,256 @@ TVM 矩阵乘法优化
 
 ---
 
-## 🔧 实践 3：AutoTVM 自动调优
+## 🔧 实践 3：轻量参数搜索（当前环境可运行）
 
-### 什么是 AutoTVM？
+### 为什么这里不用 AutoTVM？
 
-**定义**：AutoTVM 用机器学习自动搜索最优调度配置。
+当前这台机器里的 TVM 具备：
 
-**工作流程**：
+- `te`
+- `tir`
+- `meta_schedule`
 
-```
-定义搜索空间
-    ↓
-采样配置（随机/贝叶斯优化）
-    ↓
-编译并测量性能
-    ↓
-更新模型（预测更好的配置）
-    ↓
-重复直到收敛
-    ↓
-输出最优调度
-```
+但**不具备**：
 
-### AutoTVM 实战
+- `autotvm`
+- `relay`
+
+因此，这里不用 `AutoTVM`，而是先实现一个**轻量参数搜索器**。它虽然没有 AutoTVM 那么智能，但足够帮你理解“搜索空间 -> 编译 -> 测量 -> 选择最优配置”这个核心流程。
+
+### 轻量自动搜索实战
 
 ```python
-# tvm_autotvm.py
-import tvm
-from tvm import te, autotvm
-import numpy as np
+# tvm_search_schedule.py
+import itertools
+import json
 import time
-import logging
 
-# 配置日志
-logging.getLogger('autotvm').setLevel(logging.INFO)
+import numpy as np
+import tvm
+from tvm import te
 
-print("AutoTVM 自动调优")
+print("TVM 轻量参数搜索")
 print("=" * 70)
 
-# 矩阵大小
 M, N, K = 512, 512, 512
 
-# 定义计算
-A = te.placeholder((M, K), name='A')
-B = te.placeholder((K, N), name='B')
-k = te.reduce_axis((0, K), 'k')
-C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name='C')
+A = te.placeholder((M, K), name="A")
+B = te.placeholder((K, N), name="B")
+k = te.reduce_axis((0, K), "k")
+C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name="C")
 
-# ===== 定义搜索空间 =====
-@autotvm.template("matmul_example")
-def matmul_template(M, N, K):
-    A = te.placeholder((M, K), name='A')
-    B = te.placeholder((K, N), name='B')
-    k = te.reduce_axis((0, K), 'k')
-    C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name='C')
-    
-    s = te.create_schedule(C.op)
-    
-    # 定义可调优的轴
-    xo, yo, xi, yi = s[C].tile(C.op.axis[0], C.op.axis[1], 32, 32)
-    
-    # 配置空间
-    cfg = autotvm.get_config()
-    cfg.define_split("tile_x", C.op.axis[0], num_outputs=2)
-    cfg.define_split("tile_y", C.op.axis[1], num_outputs=2)
-    cfg.define_knob("parallel", [True, False])
-    cfg.define_knob("vectorize", [True, False])
-    
-    # 应用配置
-    cfg.apply(s, C, "tile_x", axis=0, factor=cfg.tile_x[0])
-    cfg.apply(s, C, "tile_y", axis=1, factor=cfg.tile_y[0])
-    
-    if cfg.parallel:
-        s[C].parallel(s[C].op.axis[0])
-    if cfg.vectorize:
-        s[C].vectorize(s[C].op.axis[1])
-    
-    return s, [A, B, C]
 
-# ===== 调优配置 =====
-task = autotvm.task.create(
-    "matmul_example",
-    args=(M, N, K),
-    target='llvm -mcpu=apple-m1'
-)
+def build_schedule(tile_x, tile_y, use_parallel, use_vectorize):
+    func = te.create_prim_func([A, B, C])
+    s = tvm.tir.Schedule(func)
+    block = s.get_block("C")
+    i, j, k_loop = s.get_loops(block)
+    xo, xi = s.split(i, factors=[None, tile_x])
+    yo, yi = s.split(j, factors=[None, tile_y])
+    s.reorder(xo, yo, xi, yi, k_loop)
+    if use_parallel:
+        s.parallel(xo)
+    if use_vectorize:
+        s.vectorize(yi)
+    return s
 
-print(f"搜索空间大小：{len(task.config_space)} 种配置")
 
-# ===== 执行调优 =====
-print("\n开始调优（约 5-10 分钟）...")
-tuner = autotvm.tuner.GridSearchTuner(task)
-# 也可以用 RandomTuner 或 XGBTuner
+def benchmark(schedule, runs=10):
+    rt_mod = tvm.build(schedule.mod["main"], target="llvm -mcpu=apple-m1")
+    f = rt_mod["main"]
+    a = np.random.rand(M, K).astype("float32")
+    b = np.random.rand(K, N).astype("float32")
+    c = np.zeros((M, N), dtype="float32")
 
-# 调优参数
-tuning_options = {
-    'log_filename': 'matmul_autotvm.log',
-    'n_trial': 20,  # 尝试 20 种配置
-    'early_stopping': 10,  # 10 次没改进就停止
-}
+    f(a, b, c)  # warmup
 
-tuner.tune(**tuning_options)
-
-# ===== 应用最优配置 =====
-print("\n应用最优配置...")
-with autotvm.apply_history_best('matmul_autotvm.log'):
-    s, arg_bufs = matmul_template(M, N, K)
-    
-# 编译
-print("编译最优调度...")
-f = tvm.build(s, arg_bufs, target='llvm -mcpu=apple-m1', name='matmul_opt')
-
-# ===== 性能测试 =====
-def benchmark(f, runs=20):
-    ctx = tvm.cpu(0)
-    a = tvm.nd.array(np.random.rand(M, K).astype('float32'), ctx)
-    b = tvm.nd.array(np.random.rand(K, N).astype('float32'), ctx)
-    c = tvm.nd.array(np.zeros((M, N), dtype='float32'), ctx)
-    
-    # 预热
-    f(a, b, c)
-    
-    # 测试
     start = time.time()
     for _ in range(runs):
         f(a, b, c)
     end = time.time()
-    
     return (end - start) / runs * 1000
 
-autotvm_time = benchmark(f)
-print(f"\nAutoTVM 优化后：{autotvm_time:.2f} ms")
 
-# 对比基础版本
-s_base = te.create_schedule(C.op)
-f_base = tvm.build(s_base, [A, B, C], target='llvm -mcpu=apple-m1')
-base_time = benchmark(f_base)
-print(f"基础版本：{base_time:.2f} ms")
-print(f"加速比：{base_time / autotvm_time:.2f}x")
+search_space = list(
+    itertools.product(
+        [8, 16, 32, 64],      # tile_x
+        [8, 16, 32, 64],      # tile_y
+        [False, True],        # parallel
+        [False, True],        # vectorize
+    )
+)
 
-print("\n✅ AutoTVM 调优完成！")
-print(f"最优配置已保存到：matmul_autotvm.log")
+print(f"搜索空间大小：{len(search_space)}")
+
+results = []
+for idx, (tile_x, tile_y, use_parallel, use_vectorize) in enumerate(search_space, start=1):
+    if tile_x > M or tile_y > N:
+        continue
+
+    schedule = build_schedule(tile_x, tile_y, use_parallel, use_vectorize)
+    latency = benchmark(schedule, runs=5)
+    result = {
+        "tile_x": tile_x,
+        "tile_y": tile_y,
+        "parallel": use_parallel,
+        "vectorize": use_vectorize,
+        "latency_ms": latency,
+    }
+    results.append(result)
+    print(f"[{idx:02d}/{len(search_space)}] {result}")
+
+best = min(results, key=lambda x: x["latency_ms"])
+print("\n最佳配置：")
+print(best)
+
+with open("matmul_search_best.json", "w", encoding="utf-8") as f:
+    json.dump(best, f, indent=2)
+
+print("\n✅ 搜索完成！")
+print("最优配置已保存到：matmul_search_best.json")
 ```
 
 **运行**：
 
 ```bash
-python tvm_autotvm.py
+python tvm_search_schedule.py
 ```
 
 **预期输出**：
 
-```
-AutoTVM 自动调优
+```text
+TVM 轻量参数搜索
 ======================================================================
-搜索空间大小：64 种配置
-
-开始调优（约 5-10 分钟）...
-[AutoTVM] Trial 1/20... latency: 45.32 ms
-[AutoTVM] Trial 2/20... latency: 38.21 ms
-[AutoTVM] Trial 3/20... latency: 12.45 ms  ← 找到好的配置
+搜索空间大小：64
+[01/64] {'tile_x': 8, 'tile_y': 8, 'parallel': False, 'vectorize': False, 'latency_ms': 46.1}
+[02/64] {'tile_x': 8, 'tile_y': 8, 'parallel': False, 'vectorize': True, 'latency_ms': 39.4}
 ...
-[AutoTVM] Best latency: 8.12 ms
+最佳配置：
+{'tile_x': 32, 'tile_y': 32, 'parallel': True, 'vectorize': True, 'latency_ms': 7.8}
 
-应用最优配置...
-编译最优调度...
-
-AutoTVM 优化后：8.12 ms
-基础版本：85.32 ms
-加速比：10.51x
-
-✅ AutoTVM 调优完成！
-最优配置已保存到：matmul_autotvm.log
+✅ 搜索完成！
+最优配置已保存到：matmul_search_best.json
 ```
 
-### 加载已调优的配置
+### 加载搜索到的最优配置
 
 ```python
-# tvm_load_tuned.py
+# tvm_load_best_schedule.py
+import json
 import tvm
-from tvm import te, autotvm
-import numpy as np
+from tvm import te
 
-# 加载调优日志
-autotvm.apply_history_best('matmul_autotvm.log')
+M, N, K = 512, 512, 512
 
-# 使用模板（会自动应用最优配置）
-s, arg_bufs = matmul_template(512, 512, 512)
+A = te.placeholder((M, K), name="A")
+B = te.placeholder((K, N), name="B")
+k = te.reduce_axis((0, K), "k")
+C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name="C")
 
-# 编译
-f = tvm.build(s, arg_bufs, target='llvm -mcpu=apple-m1')
+with open("matmul_search_best.json", "r", encoding="utf-8") as f:
+    best = json.load(f)
 
-# 直接使用！
+s = tvm.tir.Schedule(te.create_prim_func([A, B, C]))
+block = s.get_block("C")
+i, j, k_loop = s.get_loops(block)
+xo, xi = s.split(i, factors=[None, best["tile_x"]])
+yo, yi = s.split(j, factors=[None, best["tile_y"]])
+s.reorder(xo, yo, xi, yi, k_loop)
+if best["parallel"]:
+    s.parallel(xo)
+if best["vectorize"]:
+    s.vectorize(yi)
+
+f = tvm.build(s.mod["main"], target="llvm -mcpu=apple-m1")
+print("✅ 已加载最优配置并完成编译")
 ```
 
 ---
 
-## 🔧 实践 4：卷积神经网络优化
+## 🔧 实践 4：端到端模型编译前置检查（当前环境版）
 
-### TVM 编译 MobileNet
+### 为什么这里不直接编译 MobileNet？
+
+这一节原本想演示：
+
+- PyTorch 模型 -> `Relay`
+- `Relay` -> LLVM/Metal
+- 端到端性能对比
+
+但当前这台机器上的 TVM 安装 **没有 `relay` 模块**，因此直接写 `from tvm import relay` 会报错。  
+所以这节先改成一个**前置检查脚本**，帮助你判断“当前环境能不能做模型级编译”。
+
+### 能力检查脚本
 
 ```python
-# tvm_mobilenet.py
+# tvm_capability_check.py
 import tvm
-from tvm import relay
-import torch
-import time
 
-print("TVM 编译 MobileNet-V2")
+print("TVM 能力检查")
 print("=" * 70)
 
-# 1. 加载模型
-print("\n1. 加载 PyTorch MobileNet-V2...")
-model = torch.models.mobilenet_v2(weights=torch.models.MobileNet_V2_Weights.IMAGENET1K_V1)
-model.eval()
+capabilities = {
+    "te": hasattr(tvm, "te"),
+    "tir": hasattr(tvm, "tir"),
+    "relax": hasattr(tvm, "relax"),
+    "relay": hasattr(tvm, "relay"),
+    "meta_schedule": hasattr(tvm, "meta_schedule"),
+    "autotvm": hasattr(tvm, "autotvm"),
+}
 
-# 2. 追踪计算图
-input_shape = (1, 3, 224, 224)
-input_data = torch.randn(input_shape)
+for name, available in capabilities.items():
+    print(f"{name:>14}: {available}")
 
-print("2. 追踪计算图...")
-scripted_model = torch.jit.trace(model, input_data)
-
-# 3. 转换为 Relay IR
-print("3. 转换为 Relay IR...")
-mod, params = relay.frontend.from_pytorch(scripted_model, [("input0", input_shape)])
-
-# 4. 编译
-target = tvm.target.Target("llvm -mcpu=apple-m1")
-print(f"4. 编译到目标：{target}")
-
-print("5. 编译中（可能需要 2-3 分钟）...")
-with tvm.transform.PassContext(opt_level=3):
-    lib = relay.build(mod, target=target, params=params)
-
-print("✅ 编译完成！")
-
-# 5. 创建运行时
-dev = tvm.cpu(0)
-module = tvm.contrib.graph_executor.GraphModule(lib["default"](dev))
-
-# 6. 性能对比
-def benchmark_tvm(module, input_data, runs=10):
-    input_tvm = tvm.nd.array(input_data.numpy(), dev)
-    
-    # 预热
-    module.set_input("input0", input_tvm)
-    module.run()
-    
-    # 测试
-    start = time.time()
-    for _ in range(runs):
-        module.set_input("input0", input_tvm)
-        module.run()
-    end = time.time()
-    
-    return (end - start) / runs * 1000
-
-def benchmark_pytorch(model, input_data, runs=10):
-    model.eval()
-    with torch.no_grad():
-        # 预热
-        _ = model(input_data)
-        
-        # 测试
-        start = time.time()
-        for _ in range(runs):
-            _ = model(input_data)
-        end = time.time()
-        
-        return (end - start) / runs * 1000
-
-print("\n6. 性能测试（10 次平均）：")
-pytorch_time = benchmark_pytorch(model, input_data)
-print(f"PyTorch 原生：{pytorch_time:.2f} ms")
-
-tvm_time = benchmark_tvm(module, input_data)
-print(f"TVM 编译后：{tvm_time:.2f} ms")
-
-print(f"\n加速比：{pytorch_time / tvm_time:.2f}x")
-print(f"性能提升：{(1 - tvm_time / pytorch_time) * 100:.1f}%")
-
-# 7. 验证结果
-module.set_input("input0", tvm.nd.array(input_data.numpy(), dev))
-module.run()
-tvm_output = module.get_output(0).numpy()
-
-with torch.no_grad():
-    pytorch_output = model(input_data).numpy()
-
-diff = abs(tvm_output - pytorch_output).max()
-print(f"\n结果验证：最大差异 = {diff:.6f}")
-print("✅ 结果正确！" if diff < 1e-4 else "❌ 结果不一致")
-
-# 8. 保存编译产物
-print("\n7. 保存编译产物...")
-lib.export_library("mobilenet_tvm.so")
-print("✅ 已保存到：mobilenet_tvm.so")
-print("下次可直接加载，无需重新编译！")
+print("\n当前建议：")
+if capabilities["te"] and capabilities["tir"]:
+    print("- 可以继续做本篇的 TE/TIR 调度实验")
+if not capabilities["relay"]:
+    print("- 当前不能做 Relay 端到端模型编译（例如 MobileNet/ResNet）")
+if capabilities["meta_schedule"]:
+    print("- 后续可以学习 MetaSchedule，但需要单独准备示例")
+if not capabilities["autotvm"]:
+    print("- 当前不能直接运行 AutoTVM 教程代码")
 ```
 
 **运行**：
 
 ```bash
-python tvm_mobilenet.py
+python tvm_capability_check.py
 ```
 
-**预期输出**（M1 Pro 实测）：
+**你当前环境的实际结果应接近**：
 
-```
-TVM 编译 MobileNet-V2
+```text
+TVM 能力检查
 ======================================================================
+            te: True
+           tir: True
+         relax: True
+         relay: False
+ meta_schedule: True
+       autotvm: False
 
-1. 加载 PyTorch MobileNet-V2...
-2. 追踪计算图...
-3. 转换为 Relay IR...
-4. 编译到目标：llvm -mcpu=apple-m1
-5. 编译中（可能需要 2-3 分钟）...
-✅ 编译完成！
-
-6. 性能测试（10 次平均）：
-PyTorch 原生：45.32 ms
-TVM 编译后：22.15 ms
-
-加速比：2.05x
-性能提升：51.1%
-
-结果验证：最大差异 = 0.000002
-✅ 结果正确！
-
-7. 保存编译产物...
-✅ 已保存到：mobilenet_tvm.so
-下次可直接加载，无需重新编译！
+当前建议：
+- 可以继续做本篇的 TE/TIR 调度实验
+- 当前不能做 Relay 端到端模型编译（例如 MobileNet/ResNet）
+- 后续可以学习 MetaSchedule，但需要单独准备示例
+- 当前不能直接运行 AutoTVM 教程代码
 ```
+
+### 如果以后要恢复端到端模型编译
+
+你需要重新准备一套更完整的 TVM 编译环境，至少满足：
+
+- `hasattr(tvm, "relay") == True`
+- 如果要跑 GPU/Metal，还需要对应后端编译开启
+
+在当前环境下，建议把重点放在：
+
+- `te.create_prim_func`
+- `tvm.tir.Schedule`
+- 循环分块 / 并行 / 向量化
+- 轻量参数搜索
 
 ---
 
@@ -708,7 +656,7 @@ TVM 编译后：22.15 ms
 |------|---------|-----------|
 | 向量操作 | 并行 + 向量化 | 4-8x |
 | 矩阵乘法 | 分块 + 并行 + 向量化 | 8-12x |
-| 卷积 | AutoTVM 自动搜索 | 2-5x |
+| 卷积/规则算子 | 手写调度 + 参数搜索 | 2-5x |
 | 小模型 | torch.compile | 1.5-2x |
 | 大模型 | TVM 编译 | 2-3x |
 
@@ -736,13 +684,13 @@ print(tracemalloc.get_traced_memory())
 
 ## 🤔 常见问题
 
-### Q1: AutoTVM 调优太慢了怎么办？
+### Q1: 为什么这篇里不用 AutoTVM？
 
 **A**: 
-- 减少 `n_trial`（先试 10-20 次）
-- 用 `RandomTuner` 代替 `GridSearchTuner`
-- 用 `XGBTuner`（基于机器学习，更快收敛）
-- 调优一次，保存日志，多次复用
+- 因为你当前这套 TVM 安装里 `hasattr(tvm, "autotvm") == False`
+- 也就是说，笔记里原来的 AutoTVM 代码在当前环境下无法直接导入
+- 所以这里改成了“轻量参数搜索”，核心思想一致，但实现更贴近你现在的实际环境
+- 以后如果你安装了带 `autotvm` 的完整 TVM，再回来看官方 AutoTVM 教程会更顺
 
 ### Q2: TVM 编译的模型比原生还慢？
 
@@ -750,7 +698,7 @@ print(tracemalloc.get_traced_memory())
 - 编译优化级别不够（用 `opt_level=3`）
 - 目标配置不对（用 `-mcpu=apple-m1`）
 - 模型太小（编译开销 > 收益）
-- 没有调优（用 AutoTVM）
+- 没有调优（先做手写调度，再做轻量参数搜索）
 
 ### Q3: 如何在 M1 Mac 上获得最佳性能？
 
@@ -762,8 +710,7 @@ target = tvm.target.Target("llvm -mcpu=apple-m1")
 # 2. 启用 NEON 向量化
 target = tvm.target.Target("llvm -mcpu=apple-m1 -mattr=+neon")
 
-# 3. 用 TVM 的 Metal 后端（如果支持）
-target = tvm.target.Target("metal")
+# 3. 当前环境先专注 CPU 调度；Metal 只有在重新编译 TVM 并启用后才考虑
 ```
 
 ### Q4: TVM 和 torch.compile 怎么选？
@@ -784,12 +731,12 @@ target = tvm.target.Target("metal")
 
 - [ ] 跑通 `tvm_schedule_basic.py`，理解调度基础
 - [ ] 跑通 `tvm_matmul_optimize.py`，对比不同优化策略
-- [ ] 尝试 AutoTVM 调优（可以用更小的矩阵）
+- [ ] 尝试轻量参数搜索（可以先用更小的矩阵）
 - [ ] 在笔记里记录性能数据和心得
 
 ### 选做（深入）
 
-- [ ] 用 TVM 编译自己的模型
+- [ ] 先运行 `tvm_capability_check.py`，判断当前环境是否支持模型级编译
 - [ ] 尝试不同的分块大小（16, 32, 64）
 - [ ] 阅读 TVM 源码中的调度实现
 - [ ] 对比 TVM 和 torch.compile 的性能
@@ -798,8 +745,8 @@ target = tvm.target.Target("metal")
 
 ## 📚 参考资料
 
-- TVM 调度教程：https://tvm.apache.org/docs/how_to/tune_with_autotvm/
-- AutoTVM 文档：https://tvm.apache.org/docs/reference/api/python/autotvm.html
+- TVM 调度教程：https://tvm.apache.org/docs/topic/vta/tutorials/optimize/convolution_opt.html
+- MetaSchedule 文档：https://tvm.apache.org/docs/reference/api/python/meta_schedule.html
 - TVM 示例代码：https://github.com/apache/tvm/tree/main/tests/python/topi/python
 - Apple M1 优化指南：https://developer.apple.com/documentation/performance
 
@@ -818,5 +765,5 @@ target = tvm.target.Target("metal")
 
 _笔记创建：2026-03-20_  
 _适合人群：Java 应用开发背景，AI 编译器零基础_  
-_平台：macOS + Python 3.11（CPU 优化）_  
+_平台：macOS + Python 3.11（TVM TE/TIR 调度，CPU 优化）_  
 _难度：⭐⭐⭐⭐（需要理解循环优化和内存层次）_
