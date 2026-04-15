@@ -4,7 +4,7 @@
 > 📚 阶段：阶段 3 - LLM 推理优化  
 > ⏱️ 预计耗时：2-3 周  
 > 💻 平台：Linux/Windows + NVIDIA GPU（显存 24GB+）  
-> 🔗 前置：[09-LLM 推理优化](./09-llm-inference-kv-cache.md), [12-Transformer 架构](./12-transformer-architecture-deep-dive.md)
+> 🔗 前置：[12-LLM 推理优化](./12-llm-inference-kv-cache.md), [11-Transformer 架构](./11-transformer-architecture-deep-dive.md)
 
 ---
 

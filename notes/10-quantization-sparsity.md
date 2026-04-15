@@ -4,7 +4,7 @@
 > 📚 阶段：阶段 3 - LLM 推理优化  
 > ⏱️ 预计耗时：2-3 周  
 > 💻 平台：Linux/Windows + NVIDIA GPU（支持 Tensor Core）  
-> 🔗 前置：[06-GEMM 优化实战](./06-gemm-optimization.md), [07-算子融合](./07-operator-fusion.md)
+> 🔗 前置：[06-GEMM 优化实战](./06-gemm-optimization.md), [08-算子融合](./08-operator-fusion.md)
 
 ---
 

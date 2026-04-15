@@ -4,7 +4,7 @@
 > 📚 阶段：阶段 3 - LLM 推理优化  
 > ⏱️ 预计耗时：3-4 周  
 > 💻 平台：Linux/Windows + NVIDIA GPU（显存 16GB+）  
-> 🔗 前置：[07-算子融合](./07-operator-fusion.md), [08-量化与稀疏化](./08-quantization-sparsity.md)
+> 🔗 前置：[08-算子融合](./08-operator-fusion.md), [10-量化与稀疏化](./10-quantization-sparsity.md)
 
 ---
 

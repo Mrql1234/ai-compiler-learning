@@ -4,7 +4,7 @@
 > 📚 阶段：阶段 3 - LLM 推理优化  
 > ⏱️ 预计耗时：2-3 周  
 > 💻 平台：Linux/Windows + NVIDIA GPU  
-> 🔗 前置：[09-LLM 推理优化](./09-llm-inference-kv-cache.md), [10-Triton 编程](./10-triton-programming.md)
+> 🔗 前置：[12-LLM 推理优化](./12-llm-inference-kv-cache.md), [07-Triton 编程](./07-triton-programming.md)
 
 ---
 
