@@ -15,16 +15,16 @@
 1. 理解 **GEMM（通用矩阵乘法）** 为什么是 AI 计算的核心
 2. 掌握 **多级分块（Tiling）** 优化策略
 3. 理解 **Register 重用** 和 **Shared Memory 优化**
-4. 能手写一个 **性能接近 cuBLAS 80%+** 的矩阵乘法 kernel
+4. 理解手写 GEMM 从朴素实现走向**高性能分块 kernel**所需的关键优化
 5. 学会用 **Nsight Compute** 分析性能瓶颈
 
 ---
 
 ## 💡 为什么 GEMM 如此重要？
 
-### GEMM = AI 计算的 90%
+### GEMM 往往占据主要计算量
 
-**真相**：深度学习模型中，**矩阵乘法占了 90% 以上的计算量**。
+**经验规律**：在很多以稠密线性层为主的模型里，矩阵乘法往往占据很大一部分计算量，但具体占比会随着模型结构、batch size、序列长度和算子融合策略变化。
 
 ```
 Transformer 层：
@@ -38,26 +38,26 @@ Transformer 层：
 全连接层：GEMM
 ```
 
-**结论**：优化好 GEMM，就优化好了 AI 推理/训练的 90%。
+**结论**：对于很多 dense workload，优化好 GEMM 往往就抓住了最主要的性能热点之一。
 
 ### 📊 GEMM 性能对比（A100 GPU, FP16）
 
+> 说明：下表用于说明**性能趋势**，不同实现、数据类型、是否启用 Tensor Core、矩阵尺寸和 CUDA 版本都会显著影响实际数值。
+
 | 实现方式 | 4096x4096 矩阵 | 性能（TFLOPS） | 相对 cuBLAS |
 |----------|----------------|----------------|-------------|
-| 朴素 CPU (单核) | 120s | 0.05 | 0.03% |
-| 朴素 CPU (多核 AVX2) | 8s | 0.8 | 0.5% |
-| 朴素 GPU (Global Memory) | 0.8s | 12 | 7% |
-| Shared Memory 优化 | 0.15s | 65 | 38% |
-| Register Tiling + Vectorize | 0.05s | 195 | 115%* |
-| **cuBLAS (官方库)** | **0.045s** | **210** | **100%** |
-| CUTLASS (NVIDIA 模板库) | 0.044s | 215 | 102% |
-
-\* FP16 + Tensor Core 模式下
+| 朴素 CPU (单核) | 数十秒级 | < 0.1 | < 0.1% |
+| 朴素 CPU (多核 AVX2) | 数秒级 | < 1 | < 1% |
+| 朴素 GPU (Global Memory) | 亚秒级 | 5-20 | 2-10% |
+| Shared Memory 优化 | 0.1-0.3s | 40-90 | 20-45% |
+| Register Tiling + 向量化 | 0.05-0.08s | 120-180 | 60-85% |
+| **cuBLAS (同精度配置)** | **约 0.045s** | **约 210** | **100%** |
+| CUTLASS (模板库) | 接近 cuBLAS | 同量级 | 95-105% |
 
 **关键洞察**：
-- 朴素 GPU 实现只有 cuBLAS 的 **7%** 性能
-- 经过系统优化，可以达到 **80-90%** 的 cuBLAS 性能
-- 最后 10% 需要 **Tensor Core** 和 **汇编级优化**
+- 朴素 GPU 实现通常只有 cuBLAS 的个位数百分比性能
+- 经过系统优化，手写 kernel 有机会逼近 cuBLAS，但通常依赖 GPU 型号、尺寸和数据类型
+- 最后的一截性能往往还需要 **Tensor Core、异步拷贝、流水线和更细的调参**
 
 ---
 
@@ -132,20 +132,20 @@ __global__ void gemm_naive(float *A, float *B, float *C, int M, int K, int N) {
 全局内存访问次数：2 * M * N * K 次读取 + M * N 次写入
 
 对于 1024x1024 矩阵：
-  - 读取：2 * 1024³ = 2GB 数据
-  - A100 全球带宽：~1.5 TB/s
-  - 理论最小时间：2GB / 1.5TB/s = 1.3ms
-  - 实际时间：~8ms（效率 16%）
+  - 读取：2 * 1024³ 个 float ≈ 8GB 数据（FP32）
+  - A100 Global Memory 带宽：~1.5 TB/s
+  - 理论下界：8GB / 1.5TB/s ≈ 5.3ms
+  - 实际时间：~8ms（说明远不止算力，还受到访存模式和缓存行为影响）
 ```
 
 **瓶颈**：
 1. **Global Memory 带宽限制** - 每次访问都走慢速全局内存
 2. **重复读取** - 每个 A[i,k] 被读取 N 次，每个 B[k,j] 被读取 M 次
-3. **非合并访问** - B 的列访问是跨步的（stride = N）
+3. **局部性差** - 对单个线程来说，`B[k * N + col]` 是沿 `k` 方向的 stride-`N` 访问，复用和缓存友好性都很差
 
 ---
 
-### 版本 2：Shared Memory 分块（1D Tiling）
+### 版本 2：Shared Memory 分块
 
 **核心思想**：把矩阵分成小块，每块加载到 Shared Memory，重复使用。
 
@@ -211,61 +211,79 @@ Global Memory 带宽：~1.5 TB/s（A100）
 
 ---
 
-### 版本 3：2D 分块 + Register 缓存
+### 版本 3：线程级分块 + Register 累加器
 
-**核心思想**：每个线程计算多个输出元素，最大化 Register 重用。
+**核心思想**：在 block 级分块之外，再让**每个线程计算一个小的输出子块**，把多个累加器放进 Register 中。
+
+> 下面这段代码是**教学版示意实现**，重点展示“线程 tile 的索引关系”和“Register 外积更新”。
+> 它比生产级 kernel 简单，但索引关系是自洽的。
 
 ```cuda
-#define BLOCK_SIZE 16
-#define THREAD_MAT_M 4  // 每个线程计算 4x4 输出块
-#define THREAD_MAT_N 4
+#define BLOCK_M 16
+#define BLOCK_N 16
+#define BLOCK_K 16
+#define THREADS_Y 8
+#define THREADS_X 8
+#define THREAD_TILE_M 2
+#define THREAD_TILE_N 2
 
-__global__ void gemm_register_tiling(float *A, float *B, float *C, 
-                                      int M, int K, int N) {
-    __shared__ float As[BLOCK_SIZE][BLOCK_SIZE + 1];  // +1 避免 bank conflict
-    __shared__ float Bs[BLOCK_SIZE][BLOCK_SIZE + 1];
+__global__ void gemm_register_tiling_demo(const float *A, const float *B, float *C,
+                                          int M, int K, int N) {
+    __shared__ float As[BLOCK_M][BLOCK_K];
+    __shared__ float Bs[BLOCK_K][BLOCK_N];
     
-    // 每个线程负责 4x4 输出块
-    int threadRow = threadIdx.y;
-    int threadCol = threadIdx.x;
+    int ty = threadIdx.y;
+    int tx = threadIdx.x;
+    int blockRow = blockIdx.y * BLOCK_M;
+    int blockCol = blockIdx.x * BLOCK_N;
     
-    int blockRow = blockIdx.y;
-    int blockCol = blockIdx.x;
+    // 每个线程负责 2x2 输出块
+    int rowBase = blockRow + ty * THREAD_TILE_M;
+    int colBase = blockCol + tx * THREAD_TILE_N;
+    float acc[THREAD_TILE_M][THREAD_TILE_N] = {0.0f};
     
-    // 计算这个线程负责的输出块的起始位置
-    int cRow = blockRow * BLOCK_SIZE + threadRow;
-    int cCol = blockCol * BLOCK_SIZE + threadCol;
-    
-    // 每个线程的 4x4 累加器（存在 Register 中）
-    float acc[THREAD_MAT_M][THREAD_MAT_N] = {0.0f};
-    
-    // 分块循环
-    int numTiles = (K + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int numTiles = (K + BLOCK_K - 1) / BLOCK_K;
     for (int t = 0; t < numTiles; t++) {
-        // 协作加载 A 到 Shared Memory
-        int loadRow = cRow;
-        int loadCol = t * BLOCK_SIZE + threadCol;
-        As[threadRow][threadCol] = (loadRow < M && loadCol < K) ?
-                                    A[loadRow * K + loadCol] : 0.0f;
-        
-        // 协作加载 B 到 Shared Memory
-        loadRow = t * BLOCK_SIZE + threadRow;
-        loadCol = cCol;
-        Bs[threadRow][threadCol] = (loadRow < K && loadCol < N) ?
-                                    B[loadRow * N + loadCol] : 0.0f;
+        // 8x8 个线程协作填满 16x16 的 A/B tile：每个线程各加载 4 个元素
+        #pragma unroll
+        for (int li = 0; li < 2; li++) {
+            #pragma unroll
+            for (int lj = 0; lj < 2; lj++) {
+                int sRow = ty + li * THREADS_Y;
+                int sCol = tx + lj * THREADS_X;
+
+                int aRow = blockRow + sRow;
+                int aCol = t * BLOCK_K + sCol;
+                As[sRow][sCol] = (aRow < M && aCol < K) ? A[aRow * K + aCol] : 0.0f;
+
+                int bRow = t * BLOCK_K + sRow;
+                int bCol = blockCol + sCol;
+                Bs[sRow][sCol] = (bRow < K && bCol < N) ? B[bRow * N + bCol] : 0.0f;
+            }
+        }
         
         __syncthreads();
         
-        // 每个线程计算 4x4 输出块
+        // Register 外积更新：一次从 Shared Memory 取出一小组 A/B 片段
         #pragma unroll
-        for (int k = 0; k < BLOCK_SIZE; k++) {
-            float aVal = As[threadRow][k];
+        for (int k = 0; k < BLOCK_K; k++) {
+            float aFrag[THREAD_TILE_M];
+            float bFrag[THREAD_TILE_N];
+
             #pragma unroll
-            for (int j = 0; j < THREAD_MAT_N; j++) {
-                float bVal = Bs[k][threadCol + j];
+            for (int i = 0; i < THREAD_TILE_M; i++) {
+                aFrag[i] = As[ty * THREAD_TILE_M + i][k];
+            }
+            #pragma unroll
+            for (int j = 0; j < THREAD_TILE_N; j++) {
+                bFrag[j] = Bs[k][tx * THREAD_TILE_N + j];
+            }
+
+            #pragma unroll
+            for (int i = 0; i < THREAD_TILE_M; i++) {
                 #pragma unroll
-                for (int i = 0; i < THREAD_MAT_M; i++) {
-                    acc[i][j] += aVal * bVal;
+                for (int j = 0; j < THREAD_TILE_N; j++) {
+                    acc[i][j] += aFrag[i] * bFrag[j];
                 }
             }
         }
@@ -273,13 +291,13 @@ __global__ void gemm_register_tiling(float *A, float *B, float *C,
         __syncthreads();
     }
     
-    // 写回全局内存
+    // 写回这个线程负责的 2x2 输出块
     #pragma unroll
-    for (int i = 0; i < THREAD_MAT_M; i++) {
+    for (int i = 0; i < THREAD_TILE_M; i++) {
         #pragma unroll
-        for (int j = 0; j < THREAD_MAT_N; j++) {
-            int row = cRow + i;
-            int col = cCol + j;
+        for (int j = 0; j < THREAD_TILE_N; j++) {
+            int row = rowBase + i;
+            int col = colBase + j;
             if (row < M && col < N) {
                 C[row * N + col] = acc[i][j];
             }
@@ -291,44 +309,48 @@ __global__ void gemm_register_tiling(float *A, float *B, float *C,
 **Register 重用分析**：
 
 ```
-每个线程计算 4x4 = 16 个输出元素
+每个线程计算 2x2 = 4 个输出元素
 每个输出元素需要 K 次乘加
-总共：16 * K 次乘加
+总共：4 * K 次乘加
 
 从 Shared Memory 读取：
-  - A: 每个元素被复用 4 次（4 个输出行）
-  - B: 每个元素被复用 4 次（4 个输出列）
+  - A: 同一个 A 片段会被这个线程复用到多个输出列
+  - B: 同一个 B 片段会被这个线程复用到多个输出行
 
 Register 中的累加器：
-  - 16 个 float = 64 bytes（完全在 Register 文件中）
-  - 零延迟访问
-  - 编译器自动优化
+  - 4 个 float = 16 bytes（教学版 thread tile）
+  - 访问代价远低于 Shared / Global Memory
+  - 真正高性能实现通常会扩大 thread tile，但也会提高 register 压力
 
-性能提升：
-  - Shared Memory 1D：1.2ms
-  - Register Tiling：0.25ms
-  - 加速比：4.8x（累计 32x vs 朴素 GPU）
+性能趋势（示意）：
+  - Shared Memory V2：约 1.2ms
+  - Register Tiling：约 0.3-0.5ms
+  - 通常能继续获得数倍提升，但会开始受 register 数量和 occupancy 约束
 ```
 
 ---
 
 ### 版本 4：避免 Bank Conflict
 
-**问题**：Shared Memory 分为 32 个 bank，同时访问同一 bank 会串行化。
+**问题**：Shared Memory 按地址交错映射到多个 bank；同一 warp 中如果多个线程访问落到同一 bank 的不同地址，就会发生 bank conflict，导致访问串行化。
 
 ```
-Shared Memory Bank 布局（A100）：
-  - 64KB Shared Memory / SM
-  - 32 个 bank，每个 2KB
-  - 每个 bank 每次服务 4 bytes（float）
+以常见 NVIDIA GPU 的 FP32 访问为例：
+  - Shared Memory 逻辑上分成 32 个 bank
+  - 连续的 4-byte 字通常映射到连续 bank（按 bank 编号取模）
+  - warp 中 32 个线程理想情况下分别访问不同 bank
 
 32x32 的 float 矩阵：
   As[32][32]
   
-  行访问：As[threadRow][k] - 不同线程访问不同列 ✓
-  列访问：As[k][threadCol] - 不同线程访问同一列的不同行
-  
-问题：如果 threadCol 相同，所有线程访问同一 bank！
+如果按行优先布局：
+  - 行访问通常更自然：相邻元素地址连续
+  - 列访问可能出现 stride=32 的模式
+
+问题示例：
+  - 如果 warp 里的线程访问 `As[row][fixed_col]`
+  - 连续两行在内存里相隔 32 个 float
+  - `32 mod 32 = 0`，就可能映射到同一个 bank，形成冲突
 ```
 
 **解决方案**：添加 padding，打散 bank 映射。
@@ -342,70 +364,68 @@ __shared__ float As[32][33];  // 每行多 1 个元素
 
 // 或者更通用：
 #define SHARED_PADDING 1
-__shared__ float As[BLOCK_SIZE][BLOCK_SIZE + SHARED_PADDING];
+__shared__ float As[TILE_M][TILE_K + SHARED_PADDING];
 ```
 
 **效果**：
-- 无 padding：Shared Memory 带宽利用率 ~50%
-- 有 padding：Shared Memory 带宽利用率 ~95%
-- 性能提升：15-20%
+- padding 的收益依访问模式而定，常见收益是几个百分点到十几个百分点
+- 它本质上是在改变每一行的 stride，打散原来容易冲突的 bank 映射
 
 ---
 
 ### 版本 5：Vectorized Memory Access
 
-**核心思想**：用 `float4` 一次性读取 4 个 float，提高内存带宽利用率。
+**核心思想**：在连续、对齐的维度上用 `float4` 一次读取 4 个 float，提高带宽利用率。
+
+> 下面是**示意代码**。`float4` 只适合用在地址连续且满足 16-byte 对齐的访存路径上。
 
 ```cuda
-__global__ void gemm_vectorized(float *A, float *B, float *C, 
-                                 int M, int K, int N) {
-    // 用 float4 读取，一次 16 bytes
-    float4 *A_vec = reinterpret_cast<float4*>(A);
-    float4 *B_vec = reinterpret_cast<float4*>(B);
-    float4 *C_vec = reinterpret_cast<float4*>(C);
-    
-    // ... 加载时用 float4
-    float4 a_val = A_vec[global_idx];
-    // a_val.x, a_val.y, a_val.z, a_val.w 分别是 4 个连续元素
-}
+const float4* B4 = reinterpret_cast<const float4*>(B + base_offset);
+float4 vec = B4[vec_idx];  // 一次取 4 个连续 float
+
+// 等价于：
+// vec.x, vec.y, vec.z, vec.w
 ```
 
 **要求**：
 - 内存地址必须 16-byte 对齐
-- 矩阵维度最好是 4 的倍数
+- 被向量化的那一维最好是 4 的倍数
+- 只适用于连续维度，不能机械地替换所有标量加载
 
 **效果**：
-- 内存事务减少 4x
-- 带宽利用率提升 30-40%
+- 理想情况下可减少指令条数并改善带宽利用率
+- 实际收益取决于对齐情况、访存合并和 kernel 其余瓶颈
 
 ---
 
 ## 📊 完整性能对比
 
-### 1024x1024 矩阵乘法（FP32, A100）
+> 说明：下表按 `2*M*K*N` 计算 FLOPs，数值用于展示趋势，不代表所有 GPU/编译选项下的固定结果。
+
+### 1024x1024 矩阵乘法（FP32, A100，示意）
 
 | 版本 | 技术 | 时间 (ms) | GFLOPS | vs cuBLAS |
 |------|------|-----------|--------|-----------|
 | CPU 单核 | 朴素 | 850 | 2.5 | 0.8% |
 | CPU 多核 | AVX2 + OpenMP | 45 | 47 | 15% |
-| GPU V1 | Global Memory | 8.2 | 260 | 85% |
-| GPU V2 | Shared Memory | 1.2 | 1780 | 580% |
-| GPU V3 | Register Tiling | 0.25 | 8500 | 2770% |
-| GPU V4 | + Bank Conflict Fix | 0.21 | 10100 | 3300% |
-| GPU V5 | + Vectorized Load | 0.18 | 11800 | 3870% |
-| **cuBLAS** | **官方优化** | **0.15** | **14200** | **4640%** |
+| GPU V1 | Global Memory | 8.2 | 260 | 1.8% |
+| GPU V2 | Shared Memory | 1.2 | 1780 | 12.5% |
+| GPU V3 | Register Tiling | 0.35 | 6130 | 43% |
+| GPU V4 | + Bank Conflict Fix | 0.30 | 7160 | 50% |
+| GPU V5 | + Vectorized Load | 0.24 | 8950 | 63% |
+| **cuBLAS** | **官方优化** | **0.15** | **14200** | **100%** |
 
-### 4096x4096 矩阵乘法（FP32, A100）
+### 4096x4096 矩阵乘法（FP32, A100，示意）
 
 | 版本 | 时间 (ms) | GFLOPS | vs cuBLAS |
 |------|-----------|--------|-----------|
-| GPU V5 (手写) | 2.8 | 12400 | 92% |
-| cuBLAS | 2.6 | 13400 | 100% |
+| GPU V5 (手写) | 2.8-3.2 | 10800-12400 | 80-90% |
+| cuBLAS | 2.4-2.8 | 13000-14500 | 100% |
 
 **关键洞察**：
 - 大矩阵更容易达到高利用率（并行度更高）
-- 手写优化可以达到 cuBLAS 的 **90%+** 性能
-- 最后 10% 需要 Tensor Core + PTX 汇编
+- 手写优化在大矩阵、合适 GPU 和充分调参下，可能逼近 cuBLAS
+- 最后的一截性能通常还需要 Tensor Core、异步流水线和更细粒度的工程优化
 
 ---
 
@@ -415,25 +435,20 @@ __global__ void gemm_vectorized(float *A, float *B, float *C,
 
 ```bash
 # 运行分析
-ncu --set full --launch-skip 0 --launch-count 1 ./gemm_benchmark
+ncu --set full --kernel-name regex:gemm_optimized ./gemm_benchmark
 
-# 关键指标：
-# 1. Occupancy（占用率）
-nvprof --metrics achieved_occupancy ./gemm_benchmark
-# 目标：> 50%
-
-# 2. Memory Throughput（内存吞吐）
-nvprof --metrics gld_throughput,gst_throughput ./gemm_benchmark
-# 目标：> 80% 峰值带宽
-
-# 3. Compute Throughput（计算吞吐）
-nvprof --metrics flop_count_sp,inst_replay_overhead ./gemm_benchmark
-# 目标：FP32 > 10 TFLOPS (A100)
-
-# 4. Bank Conflict
-nvprof --metrics shared_replay_overhead ./gemm_benchmark
-# 目标：< 5%
+# 查看当前环境支持哪些 metrics / sections
+ncu --query-metrics
 ```
+
+建议重点查看的 Nsight Compute 页面 / 指标类别：
+
+- `Launch Statistics`：看 occupancy、block 配置是否合理
+- `Memory Workload Analysis`：看 DRAM / L2 / Shared Memory 的吞吐和瓶颈
+- `Scheduler Statistics`：看 stall 原因是否主要来自 memory dependency 或同步
+- `Source / SASS`：看关键循环有没有被展开、是否出现过多重放或长延迟指令
+
+> 不同 GPU 架构和 CUDA 版本下，具体 metric 名称会变化；相比已经逐步淘汰的 `nvprof`，现在应优先使用 `ncu`。
 
 ### 常见瓶颈诊断
 
@@ -448,60 +463,82 @@ nvprof --metrics shared_replay_overhead ./gemm_benchmark
 
 ## 💻 实战代码
 
-### 完整优化版本
+### 可运行的分块 + Register Tiling 版本
 
 ```cuda
 // gemm_optimized.cu
 #include <cuda_runtime.h>
 #include <stdio.h>
 
-#define BLOCK_SIZE 16
-#define THREAD_MAT_M 4
-#define THREAD_MAT_N 4
+#define BLOCK_M 16
+#define BLOCK_N 16
+#define BLOCK_K 16
+#define THREADS_Y 8
+#define THREADS_X 8
+#define THREAD_TILE_M 2
+#define THREAD_TILE_N 2
 #define SHARED_PADDING 1
 
-__global__ void gemm_optimized(float *A, float *B, float *C, 
+__global__ void gemm_optimized(const float *A, const float *B, float *C,
                                 int M, int K, int N) {
-    __shared__ float As[BLOCK_SIZE][BLOCK_SIZE + SHARED_PADDING];
-    __shared__ float Bs[BLOCK_SIZE][BLOCK_SIZE + SHARED_PADDING];
+    __shared__ float As[BLOCK_M][BLOCK_K + SHARED_PADDING];
+    __shared__ float Bs[BLOCK_K][BLOCK_N + SHARED_PADDING];
     
-    int threadRow = threadIdx.y;
-    int threadCol = threadIdx.x;
-    int blockRow = blockIdx.y;
-    int blockCol = blockIdx.x;
+    int ty = threadIdx.y;
+    int tx = threadIdx.x;
+    int blockRow = blockIdx.y * BLOCK_M;
+    int blockCol = blockIdx.x * BLOCK_N;
     
-    int cRow = blockRow * BLOCK_SIZE + threadRow;
-    int cCol = blockCol * BLOCK_SIZE + threadCol;
+    int rowBase = blockRow + ty * THREAD_TILE_M;
+    int colBase = blockCol + tx * THREAD_TILE_N;
     
-    float acc[THREAD_MAT_M][THREAD_MAT_N] = {0.0f};
+    float acc[THREAD_TILE_M][THREAD_TILE_N] = {0.0f};
     
-    int numTiles = (K + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int numTiles = (K + BLOCK_K - 1) / BLOCK_K;
     
     for (int t = 0; t < numTiles; t++) {
-        // 加载 A
-        int aRow = cRow;
-        int aCol = t * BLOCK_SIZE + threadCol;
-        As[threadRow][threadCol] = (aRow < M && aCol < K) ? 
-                                    A[aRow * K + aCol] : 0.0f;
-        
-        // 加载 B
-        int bRow = t * BLOCK_SIZE + threadRow;
-        int bCol = cCol;
-        Bs[threadRow][threadCol] = (bRow < K && bCol < N) ?
-                                    B[bRow * N + bCol] : 0.0f;
+        // 每个线程为 A tile 和 B tile 各加载 2x2 个元素
+        #pragma unroll
+        for (int li = 0; li < 2; li++) {
+            #pragma unroll
+            for (int lj = 0; lj < 2; lj++) {
+                int sRow = ty + li * THREADS_Y;
+                int sCol = tx + lj * THREADS_X;
+
+                int aRow = blockRow + sRow;
+                int aCol = t * BLOCK_K + sCol;
+                As[sRow][sCol] = (aRow < M && aCol < K) ?
+                                 A[aRow * K + aCol] : 0.0f;
+
+                int bRow = t * BLOCK_K + sRow;
+                int bCol = blockCol + sCol;
+                Bs[sRow][sCol] = (bRow < K && bCol < N) ?
+                                 B[bRow * N + bCol] : 0.0f;
+            }
+        }
         
         __syncthreads();
         
-        // 计算
+        // 计算这个线程负责的 2x2 输出子块
         #pragma unroll
-        for (int k = 0; k < BLOCK_SIZE; k++) {
-            float aVal = As[threadRow][k];
+        for (int k = 0; k < BLOCK_K; k++) {
+            float aFrag[THREAD_TILE_M];
+            float bFrag[THREAD_TILE_N];
+
             #pragma unroll
-            for (int j = 0; j < THREAD_MAT_N; j++) {
-                float bVal = Bs[k][threadCol + j];
+            for (int i = 0; i < THREAD_TILE_M; i++) {
+                aFrag[i] = As[ty * THREAD_TILE_M + i][k];
+            }
+            #pragma unroll
+            for (int j = 0; j < THREAD_TILE_N; j++) {
+                bFrag[j] = Bs[k][tx * THREAD_TILE_N + j];
+            }
+
+            #pragma unroll
+            for (int i = 0; i < THREAD_TILE_M; i++) {
                 #pragma unroll
-                for (int i = 0; i < THREAD_MAT_M; i++) {
-                    acc[i][j] += aVal * bVal;
+                for (int j = 0; j < THREAD_TILE_N; j++) {
+                    acc[i][j] += aFrag[i] * bFrag[j];
                 }
             }
         }
@@ -511,11 +548,11 @@ __global__ void gemm_optimized(float *A, float *B, float *C,
     
     // 写回
     #pragma unroll
-    for (int i = 0; i < THREAD_MAT_M; i++) {
+    for (int i = 0; i < THREAD_TILE_M; i++) {
         #pragma unroll
-        for (int j = 0; j < THREAD_MAT_N; j++) {
-            int row = cRow + i;
-            int col = cCol + j;
+        for (int j = 0; j < THREAD_TILE_N; j++) {
+            int row = rowBase + i;
+            int col = colBase + j;
             if (row < M && col < N) {
                 C[row * N + col] = acc[i][j];
             }
@@ -548,9 +585,9 @@ void benchmark_gemm(int M, int K, int N) {
     cudaMemcpy(d_B, h_B, sizeB, cudaMemcpyHostToDevice);
     
     // 启动配置
-    dim3 blockDim(BLOCK_SIZE, BLOCK_SIZE);
-    dim3 gridDim((N + BLOCK_SIZE * THREAD_MAT_N - 1) / (BLOCK_SIZE * THREAD_MAT_N),
-                 (M + BLOCK_SIZE * THREAD_MAT_M - 1) / (BLOCK_SIZE * THREAD_MAT_M));
+    dim3 blockDim(THREADS_X, THREADS_Y);
+    dim3 gridDim((N + BLOCK_N - 1) / BLOCK_N,
+                 (M + BLOCK_M - 1) / BLOCK_M);
     
     // 预热
     gemm_optimized<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, K, N);
@@ -628,9 +665,11 @@ wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
 ### 2. 多级流水线（Double Buffering）
 
 ```cuda
+// 伪代码：真实实现通常使用 cp.async / cuda::pipeline / cooperative groups
+// 这里沿用前文的 tile 宏，例如 BLOCK_M / BLOCK_N / BLOCK_K
 // 用两个 Shared Memory 块，重叠加载和计算
-__shared__ float As[2][BLOCK_SIZE][BLOCK_SIZE];
-__shared__ float Bs[2][BLOCK_SIZE][BLOCK_SIZE];
+__shared__ float As[2][BLOCK_M][BLOCK_K];
+__shared__ float Bs[2][BLOCK_K][BLOCK_N];
 
 int writePhase = 0;
 int readPhase = 1;
@@ -652,25 +691,14 @@ for (int t = 0; t < numTiles; t++) {
 
 ### 3. 自动调优（AutoTVM / Ansor）
 
-```python
-# 用 TVM 自动搜索最优配置
-import tvm
-from tvm import auto_scheduler
+不同 TVM 版本在 `auto_scheduler` / `meta_schedule` 的 API 上差异较大，这里不再内嵌一段容易失效的“半正确代码”。
 
-# 定义计算
-@tvm.te.compute
-def gemm(M, K, N):
-    A = te.placeholder((M, K), name='A')
-    B = te.placeholder((K, N), name='B')
-    k = te.reduce_axis((0, K), 'k')
-    C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[k, j], axis=k), name='C')
-    return C
+更准确的理解是：
 
-# 自动搜索最优 schedule
-tasks = auto_scheduler.extract_tasks(sch, target='cuda')
-tuner = auto_scheduler.MultiStageTuner()
-tuner.tune(tasks, measure_options=auto_scheduler.MeasureOptions(...))
-```
+- TVM 可以把 GEMM 表达成 `TE/TIR` 或更高层 IR
+- 然后针对 `cuda` target 自动搜索 block size、thread tile、unroll、vectorize 等参数
+- 如果你想在当前仓库里建立直觉，建议先回看 `04` 里已经适配本机环境的调度实验
+- 真正跑 CUDA target 的 TVM 自动调优，需要在有 NVIDIA GPU 的环境里参考对应 TVM 版本的官方示例
 
 ---
 
@@ -680,12 +708,12 @@ tuner.tune(tasks, measure_options=auto_scheduler.MeasureOptions(...))
 
 - [ ] 实现朴素 GPU GEMM，记录性能基线
 - [ ] 实现 Shared Memory 分块版本，对比性能提升
-- [ ] 实现 Register Tiling 版本，达到 cuBLAS 50%+ 性能
+- [ ] 实现 Register Tiling 版本，观察 thread tile 对性能和 occupancy 的影响
 - [ ] 用 Nsight Compute 分析性能瓶颈
 
 ### 选做（深入）
 
-- [ ] 添加 Bank Conflict 优化，提升 15-20%
+- [ ] 添加 Bank Conflict 优化，观察 padding 是否带来额外收益
 - [ ] 实现 Vectorized Memory Access
 - [ ] 尝试 Tensor Core（如果有 A100/V100）
 - [ ] 阅读 CUTLASS 源码，学习工业级实现
