@@ -13,6 +13,16 @@ Java 对照：
 
 - `auto` 会发生值拷贝，若你想避免拷贝，考虑 `auto&`。
 
+```
+ for (const auto &[name, score] : scores) {
+    std::cout << name << " => " << score << "\n";
+  }
+
+  遍历 scores 中每个元素，把每个元素按引用、只读地拆成 name 和 score 两个变量来用。
+  const auto& : 只读引用，不拷贝
+
+```
+
 ## 示例代码
 
 见：`examples/07_auto_type_deduction.cpp`

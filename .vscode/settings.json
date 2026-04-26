@@ -1,0 +1,24 @@
+{
+  "cmake.useCMakePresets": "always",
+  "cmake.configureOnOpen": false,
+  "cmake.sourceDirectory": "${workspaceFolder}/projects/mlir-passes",
+  "cmake.buildDirectory": "${workspaceFolder}/projects/mlir-passes/build-wsl",
+  "cmake.configureSettings": {
+    "LLVM_DIR": "/usr/lib/llvm-15/lib/cmake/llvm",
+    "MLIR_DIR": "/usr/lib/llvm-15/lib/cmake/mlir",
+    "CMAKE_C_COMPILER": "clang-15",
+    "CMAKE_CXX_COMPILER": "clang++-15",
+    "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+  },
+  "clangd.path": "/usr/bin/clangd-15",
+  "clangd.arguments": [
+    "--background-index",
+    "--compile-commands-dir=${workspaceFolder}/projects/mlir-passes/build-wsl",
+    "--header-insertion=never",
+    "--query-driver=/usr/bin/clang-15,/usr/bin/clang++-15"
+  ],
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "files.associations": {
+    "*.td": "tablegen"
+  }
+}

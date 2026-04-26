@@ -1,21 +1,18 @@
-# MLIR Passes 库
-
-add_mlir_library(MLIRPasses
+add_library(MLIRPasses
   ConstantFoldPass.cpp
-  DeadCodeElimPass.cpp
-  OperatorFusionPass.cpp
+)
 
-  DEPENDS
-  MLIRArithDialect
-  MLIRMathDialect
-  MLIRFuncDialect
-  MLIRPass
-  MLIRTransformUtils
+target_include_directories(MLIRPasses
+  PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+  ${LLVM_INCLUDE_DIRS}
+  ${MLIR_INCLUDE_DIRS}
+)
 
-  LINK_LIBS PUBLIC
+target_link_libraries(MLIRPasses
+  PUBLIC
   MLIRIR
   MLIRPass
-  MLIRTransformUtils
+  MLIRTransforms
   MLIRArithDialect
-  MLIRMathDialect
 )

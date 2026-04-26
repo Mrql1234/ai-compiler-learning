@@ -1,0 +1,7 @@
+config.name = "mlir-passes"
+config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
+config.suffixes = [".mlir"]
+config.test_source_root = "@CMAKE_CURRENT_SOURCE_DIR@"
+config.test_exec_root = "@CMAKE_CURRENT_BINARY_DIR@"
+
+llvm_config.with_environment("PATH", config.environment["PATH"])

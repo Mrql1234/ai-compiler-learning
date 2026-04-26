@@ -15,6 +15,10 @@ int main() {
     n *= 10;
   }
 
+  for (auto n : nums) {
+    n *= 10;
+  }
+
   std::map<std::string, int> scores = {{"alice", 90}, {"bob", 95}};
   for (const auto &[name, score] : scores) {
     std::cout << name << " => " << score << "\n";

@@ -26,3 +26,10 @@ op.getDefiningOp<arith::ConstantOp>()
 ## 示例代码
 
 见：`examples/04_templates.cpp`
+
+```
+模板有函数模板 类模板
+    不是运行时多态，在编译期生成具体代码
+    把类型/常量当参数
+
+```
