@@ -8,6 +8,19 @@ namespace mlir {
 
 /// 创建常量折叠 Pass
 std::unique_ptr<Pass> createConstantFoldPass();
+void registerConstantFoldPass();
+
+/// 创建模板化常量折叠 Pass
+std::unique_ptr<Pass> createTemplateConstantFoldPass();
+void registerTemplateConstantFoldPass();
+
+/// 创建增强版手写常量折叠 Pass
+std::unique_ptr<Pass> createExtendedConstantFoldPass();
+void registerExtendedConstantFoldPass();
+
+/// 创建基于 MLIR 内建 folding/canonicalization 的常量折叠 Pass
+std::unique_ptr<Pass> createBuiltinCanonicalizeFoldPass();
+void registerBuiltinCanonicalizeFoldPass();
 
 /// 创建死代码消除 Pass
 std::unique_ptr<Pass> createDeadCodeElimPass();

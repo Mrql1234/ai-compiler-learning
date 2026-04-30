@@ -1,0 +1,9 @@
+import lit.formats
+import os
+
+config.name = "MINI_COMPILER_MLIR"
+config.test_format = lit.formats.ShTest(True)
+config.suffixes = [".mlir"]
+config.test_source_root = os.path.dirname(__file__)
+config.test_exec_root = os.path.dirname(__file__)
+config.substitutions.append(("%mini_compiler_opt", os.path.join("@CMAKE_RUNTIME_OUTPUT_DIRECTORY@", "mini-compiler-opt")))

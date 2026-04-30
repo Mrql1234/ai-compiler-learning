@@ -1,71 +1,52 @@
-﻿# Tasks: Mini AI Compiler
+# Tasks: Mini AI Compiler
 
-## Phase 1: 最小闭环
+## Phase A: 文档与架构重置
 
-- [x] T1. 建立项目目录骨架
-  - 创建 `frontend/`、`ir/`、`passes/`、`backend/cpu/`、`runtime/`、`tests/`、`examples/`、`tools/`
-  - 创建必要的 `__init__.py`
+- [x] A1. 重写 `requirements.md`
+- [x] A2. 重写 `design.md`
+- [x] A3. 重写 `tasks.md`
+- [x] A4. 更新 `README.md` 为双轨架构说明
 
-- [x] T2. 定义最小 IR 数据结构
-  - 实现 `Graph`
-  - 实现 `Node`
-  - 实现 `Value`
-  - 实现 `TensorType`
-  - 支持打印、遍历、节点替换、节点删除
+## Phase B: MLIR 工程骨架
 
-- [x] T3. 实现 PyTorch FX importer MVP
-  - 支持 `placeholder`
-  - 支持 `output`
-  - 支持 `call_module`
-  - 支持 `call_function`
-  - 第一版覆盖 `Linear / ReLU / add / mul / matmul`
+- [x] B1. 新增 `compiler-mlir/` 子工程目录
+- [x] B2. 接通官方 LLVM/MLIR CMake skeleton
+- [x] B3. 提供 dialect 注册骨架
+- [x] B4. 提供 pass 注册骨架
+- [x] B5. 提供 driver/tool 骨架
+- [x] B6. 提供 smoke test 样例
 
-- [x] T4. 实现 CPU reference backend MVP
-  - 支持常量、输入绑定、拓扑执行
-  - 支持 `matmul`
-  - 支持 `add`
-  - 支持 `mul`
-  - 支持 `relu`
+## Phase C: 前端桥接
 
-- [x] T5. 实现 Constant Fold Pass MVP
-  - 支持 `Add(Const, Const) -> Const`
-  - 支持 `Mul(Const, Const) -> Const`
-  - 支持固定点重复运行直到无变化
+- [x] C1. 明确 bridge 策略为文本桥接优先
+- [x] C2. 新增 Python bridge 导出工具
+- [ ] C3. 打通 bridge 文本 -> MLIR module 解析
+- [ ] C4. 提供 FX / ONNX 样例桥接输入
 
-- [x] T6. 实现 DCE Pass MVP
-  - 删除无用户且非图输出节点
-  - 保持图输出语义不变
+## Phase D: MLIR Pass
 
-- [x] T7. 提供 IR dump 能力
-  - 输出原始 IR
-  - 输出优化后 IR
-  - 提供简单 CLI 或脚本入口
+- [ ] D1. 在 MLIR 工程中新增 canonicalize pass 骨架
+- [ ] D2. 在 MLIR 工程中新增 constant fold pass 骨架
+- [ ] D3. 在 MLIR 工程中新增 DCE pass 骨架
+- [ ] D4. 在 MLIR 工程中新增 fusion pass 骨架
+- [ ] D5. 添加 `mlir-opt` 级测试
 
-- [x] T8. 提供 MLP 示例
-  - 编写最小 MLP 模型
-  - 通过 FX 导入
-  - 跑通 CPU backend
-  - 对照 PyTorch eager 输出
+## Phase E: CPU 路线
 
-- [x] T9. 添加基础测试
-  - IR 结构测试
-  - importer 测试
-  - CPU backend 测试
-  - constant fold / DCE 测试
+- [ ] E1. 设计 `Mini -> LLVM` lowering 路线
+- [ ] E2. 跑通 `MLIR -> LLVM IR -> CPU`
+- [ ] E3. 用 `MLP` 做 CPU 正式链路验证
 
-## Phase 2: 优化与可视化
-- [x] T10. 实现 Fusion Pass
-- [x] T11. 增强 IR dump 与 diff 展示
-- [x] T12. 添加 benchmark 脚本
-- [x] T13. 实现 ONNX importer MVP
+## Phase F: Triton/GPU 路线
 
-## Phase 3: Triton Backend
-- [x] T14. 实现 Triton kernel MVP (`matmul/add/relu`)
-- [x] T15. 实现 Triton executor
-- [x] T16. 支持 fused op lowering
-- [x] T17. 添加 CPU / Triton 对照测试与 benchmark
+- [ ] F1. 设计 `Mini -> Triton/GPU` lowering 路线
+- [ ] F2. 先支持核心算子 lowering
+- [ ] F3. 再支持 fused op lowering
+- [ ] F4. 添加 Triton/GPU 路线验证
 
-## Phase 4: MLIR 升级版
-- [x] T18. 输出 MLIR 风格 IR
-- [x] T19. 评估 IR 到 MLIR 概念映射
-- [x] T20. 迁移一个 pass 到 MLIR-based 实现
+## Phase G: 统一验证
+
+- [ ] G1. Python harness 调用 `compiler-mlir` 工具链
+- [ ] G2. 对照 eager / Python reference / MLIR backend
+- [ ] G3. 统一 benchmark 入口
+- [ ] G4. 统一 artifact dump 入口

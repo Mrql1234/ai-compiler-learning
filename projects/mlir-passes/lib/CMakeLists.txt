@@ -1,5 +1,9 @@
 add_library(MLIRPasses
   ConstantFoldPass.cpp
+  ExtendedConstantFoldPass.cpp
+  TemplateConstantFoldPass.cpp
+  BuiltinCanonicalizeFoldPass.cpp
+  PassRegistry.cpp
 )
 
 target_include_directories(MLIRPasses
@@ -14,5 +18,5 @@ target_link_libraries(MLIRPasses
   MLIRIR
   MLIRPass
   MLIRTransforms
-  MLIRArithDialect
+  MLIRArithmeticDialect
 )

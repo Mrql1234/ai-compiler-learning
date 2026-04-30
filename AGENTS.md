@@ -29,16 +29,16 @@
 
 ### 2.1 项目定位
 
-`mini-ai-compiler` 是一个**教学型 / 原型型**小项目，目标是实现一个面向小模型子集的端到端 AI 编译器。
+`mini-ai-compiler` 是一个**双轨架构**项目，目标是实现一个面向小模型子集的端到端 AI 编译器。
 
 项目题目可以概括为：
 
 > Mini AI Compiler: From ONNX / PyTorch FX to MLIR IR, Optimized CPU/Triton Execution
 
-不过当前已落地的实现重点是：
+当前分为两条轨道：
 
-- Phase 1：最小闭环
-- Phase 2：图优化与可视化的第一批能力
+- Python 轨：教学原型、bridge、reference backend、验证与 benchmark
+- MLIR 轨：正式编译器主线，位于 `projects/mini-ai-compiler/compiler-mlir/`
 
 ### 2.2 当前范围
 
@@ -63,12 +63,15 @@
 - IR 文本 dump
 - benchmark 脚本
 - ONNX importer MVP 代码框架（运行依赖 `onnx` 包）
+- MLIR 风格文本导出
+- MLIR 风格 rewrite 原型
+- `compiler-mlir/` out-of-tree MLIR 子工程骨架
 
 当前还**没有**真正进入：
 
-- Triton backend 实装
-- MLIR 风格 IR 输出
-- MLIR-based pass 迁移
+- 正式 MLIR pass 实装
+- `MLIR -> LLVM` CPU 闭环
+- `MLIR -> Triton/GPU` 正式闭环
 
 ---
 
@@ -106,6 +109,9 @@
     - `manager.py`
 - `backend/cpu/`
   - CPU reference backend
+- `compiler-mlir/`
+  - 正式 MLIR C++ 子工程
+  - 使用 out-of-tree LLVM/MLIR CMake 体系
 - `examples/`
   - 示例模型
   - 当前主要是 `mlp.py`
@@ -126,7 +132,14 @@
 
 ### 4.1 IR 设计约定
 
-当前自定义 IR 采用“**Node 表示操作，Value 表示数据边**”的思路：
+当前项目采用双层 IR 视角：
+
+- Python 原型 IR：
+  - 采用“**Node 表示操作，Value 表示数据边**”的思路
+- MLIR 主线 IR：
+  - 采用 `mini` dialect 与 MLIR module/pass/lowering 体系
+
+Python 原型 IR 具体约定如下：
 
 - `Node`
   - 表示一个操作 / 算子
@@ -172,6 +185,13 @@
 - 展示优化前后 IR 差异
 - 给后续 Triton / fused op 路线打基础
 
+MLIR 轨当前则已新增：
+
+- dialect skeleton
+- pass registration skeleton
+- compiler driver skeleton
+- smoke test skeleton
+
 ### 4.4 当前 DCE 方法
 
 当前 DCE 使用的是：
@@ -213,6 +233,21 @@
 - benchmark 脚本
 - ONNX importer MVP 代码
 
+### Phase 3 / 4
+
+当前 Phase 3 / 4 已完成“架构升级的第一批”：
+
+- MLIR 风格文本导出
+- MLIR 风格 rewrite 原型
+- Triton lowering / executor 骨架
+- `compiler-mlir/` 子工程骨架
+
+但还没有完成正式主链路：
+
+- MLIR-native pass 实装
+- `MLIR -> LLVM` CPU 路线
+- `MLIR -> Triton/GPU` 正式路线
+
 ### Phase 3
 
 当前尚未开始真正实现：
@@ -248,11 +283,11 @@
 
 如果继续推进 `mini-ai-compiler`，建议顺序是：
 
-1. 扩展更多基础算子支持
-2. 增强 `FusionPass`
-3. 稳定 ONNX importer
-4. 开始 Triton backend MVP
-5. 再做 MLIR 风格 IR 或 MLIR-based 升级
+1. 稳定 Python bridge 输出
+2. 在 `compiler-mlir/` 中实现正式 dialect / pass
+3. 打通 `MLIR -> LLVM` CPU 闭环
+4. 再打通 Triton/GPU 路线
+5. 最后统一 Python harness 验证与 benchmark
 
 ### 6.3 不建议的方向
 
@@ -289,7 +324,8 @@
 
 ## 8. 给后续协作者的提醒
 
-- 如果只是想学习编译器主链路，请优先从 `mini-ai-compiler` 入手
+- 如果只是想学习“最小闭环原型”，优先看 `mini-ai-compiler` 的 Python 轨
+- 如果想学习“更真实的编译器主线”，优先看 `mini-ai-compiler/compiler-mlir/`
 - 如果是研究 MLIR C++ pass，请看 `projects/mlir-passes/`
 - 如果是研究 Triton kernel，可把 `mini-ai-compiler` 视作前端 / IR / pass 原型，再与 Triton 实验结合
 

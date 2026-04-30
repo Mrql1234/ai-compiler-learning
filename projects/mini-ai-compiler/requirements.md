@@ -1,23 +1,33 @@
-﻿# Requirements: Mini AI Compiler
+# Requirements: Mini AI Compiler
 
 ## Summary
-本项目题目为：**Mini AI Compiler: From ONNX / PyTorch FX to MLIR IR, Optimized CPU/Triton Execution**。
+`Mini AI Compiler` 现在采用“双轨并存，但 MLIR 是真实工程主链路”的定位。
 
-项目目标是实现一个面向**小型神经网络子集**的端到端 AI 编译器，覆盖从前端模型导入，到中间表示构建、图优化、后端执行、正确性验证与 benchmark 的完整闭环。项目强调“全流程可运行”和“技术深度可继续升级”两点：第一版先以可控的小模型子集和自定义 IR 跑通闭环，后续再逐步引入 Triton backend 和 MLIR 升级路线。
+- Python 轨继续保留，负责前端导入、图规范化、样例生成、reference 执行、正确性验证与 benchmark 驱动。
+- MLIR 轨作为正式编译器主工程，采用 out-of-tree C++ MLIR 项目，负责 dialect、pass、lowering 与真实后端路线。
+
+项目新的目标不再是“先做自定义 IR，再把 MLIR 当升级项”，而是：
+
+`PyTorch FX / ONNX -> Python bridge -> MLIR dialect/module -> MLIR passes -> CPU(LLVM) + Triton/GPU lowering -> execution + validation`
 
 ## Product Goal
-系统需要支持以下完整流程：
-- 前端导入：`PyTorch FX` 和 `ONNX`
-- 中间表示：自定义简化 IR，并预留 `MLIR IR` 表达或升级路径
-- 优化 Pass：`Constant Folding`、`Dead Code Elimination`、`Operator Fusion`、`Layout / Memory Planning`
-- 后端执行：`CPU reference backend` 与 `Triton backend`
-- 验证：与 `PyTorch eager` 或 `ONNXRuntime` 对齐、IR dump、性能 benchmark
+系统必须同时具备以下两种能力：
+
+- **教学原型能力**
+  - Python 侧保留自定义 IR 与可运行原型
+  - 便于学习、讲解、快速实验与 baseline 对照
+- **真实编译器能力**
+  - 新增 `compiler-mlir/` 子工程
+  - 使用官方 LLVM/MLIR CMake 体系
+  - 在 MLIR 中实现核心优化 pass 与 lowering
+  - 支持 `CPU via LLVM` 与 `Triton/GPU` 两条主后端路线
 
 ## Scope Boundary
-本项目**不以支持完整模型生态为目标**，而是限制在一个小而完整的子集内，以保证项目能稳定落地并形成完整编译链路。
+本项目仍然面向“小模型子集”，不追求一开始覆盖完整大模型生态。
 
 ### Supported Operator Subset
-第一版推荐优先支持以下算子：
+第一批聚焦以下算子或其直接等价表达：
+
 - `MatMul`
 - `Add`
 - `Mul`
@@ -29,23 +39,25 @@
 - `Reshape`
 
 ### Supported Model Subset
-第一版推荐优先支持以下网络：
+第一批聚焦：
+
 - `MLP / FFN`
-- `单层 Attention Block 的简化版`
+- `single attention block`
 
 ## Goals
-- 构建一个可以从模型导入到执行验证的完整 AI 编译器闭环。
-- 使用小模型子集控制复杂度，保证工程可完成。
-- 在第一版中优先完成自定义 IR 路线。
-- 在后续阶段增加 ONNX、fusion、benchmark、Triton 和 MLIR 升级。
-- 让项目同时具备学习价值、展示价值和扩展价值。
+- 构建一条以 MLIR 为中心的 AI 编译器主链路。
+- 保留 Python 原型作为桥接层和 reference harness。
+- 把图优化 pass 的正式实现落在 MLIR 中，而不是只停留在自定义 IR。
+- 明确支持两条后端方向：
+  - `MLIR -> LLVM IR -> CPU`
+  - `MLIR -> Triton/GPU lowering`
+- 提供统一的正确性验证、IR dump 和 benchmark 驱动。
 
 ## Non-Goals
-- 不追求一开始支持完整 PyTorch / ONNX 模型生态。
-- 不在第一阶段实现完整 MLIR-native 编译管线。
-- 不在第一阶段支持复杂训练图、自动求导或动态图。
-- 不在第一阶段完成复杂调度器、量化系统或工业级内存优化。
-- 不要求 Triton backend 在一开始覆盖全部算子。
+- 不追求一开始支持完整 Transformer / Qwen 全模型推理。
+- 不要求第一版就完成工业级 GPU 调度、复杂内存规划或量化体系。
+- 不要求 Python 原型被完全删除。
+- 不要求第一版 bridge 就实现复杂 in-memory API 集成。
 
 ## High-Level Architecture Requirements
 
@@ -53,158 +65,173 @@
 系统必须支持从外部模型表示导入图结构。
 
 **Acceptance criteria:**
-- Phase 1 必须支持 `PyTorch FX` 导入。
-- Phase 2 必须支持 `ONNX` 导入。
-- 导入结果必须映射为统一内部 IR，而不是为每个前端单独设计执行路径。
-- 当输入模型包含未支持算子时，系统必须显式报错并指出不支持的节点。
+- 必须支持 `PyTorch FX` 导入。
+- 必须支持 `ONNX` 导入，允许以 MVP 子集方式落地。
+- 前端输出必须能进入统一 bridge 层，而不是直接绑定某个单一 backend。
+- 当遇到未支持算子时，必须显式报错。
 
-### R2. Intermediate Representation
-系统必须具有统一的中间表示层，用于承载优化和后端 lowering。
-
-**Acceptance criteria:**
-- 第一版必须实现自定义简化 IR。
-- IR 至少应包含 `Graph`、`Node`、`TensorType`、`Attribute` 等核心概念。
-- 每个 node 至少应包含 `op_type`、`inputs`、`outputs`、`shape`、`dtype`、`attrs` 信息。
-- IR 必须可打印、可遍历、可改写。
-
-### R3. MLIR Path
-系统必须为 `MLIR IR` 预留路径。
+### R2. Python Bridge Layer
+Python 侧必须作为前端桥接层和验证层，而不是未来唯一编译核心。
 
 **Acceptance criteria:**
-- 第一版可以先采用自定义 IR。
-- 后续版本必须支持“输出 MLIR 风格 IR 文本”或“迁移到 MLIR-based IR / pass”。
-- IR 设计不得阻断向 MLIR 升级。
+- 保留现有 `frontend/`、`ir/`、`passes/`、`backend/cpu/` 原型。
+- Python 侧必须能输出一种稳定 bridge 格式给 MLIR 工程消费。
+- 第一版 bridge 默认采用 **文本桥接**，优先选择 MLIR 文本或结构化桥接文本。
+- 后续允许升级为 in-memory 或结构化 bridge，但不作为第一阶段硬要求。
 
-### R4. Optimization Passes
-系统必须支持至少四类图优化能力。
-
-**Acceptance criteria:**
-- 必须支持 `Constant Folding`。
-- 必须支持 `Dead Code Elimination`。
-- 必须支持 `Operator Fusion`。
-- 必须支持轻量级 `Layout / Memory Planning`，至少能表达 buffer 分配顺序、简单复用或 layout 元信息。
-
-### R5. CPU Backend
-系统必须提供一个 CPU reference backend。
+### R3. MLIR-Native Compiler Core
+系统必须新增一个正式的 out-of-tree C++ MLIR 子工程作为主编译器实现。
 
 **Acceptance criteria:**
-- CPU backend 必须能执行受支持子集的 IR。
-- CPU backend 可以基于 `NumPy`、`PyTorch eager` 或自定义解释器实现。
-- CPU backend 的主要职责是正确性验证和与 Triton backend 的对照。
+- 子工程目录为 `compiler-mlir/`。
+- 必须基于官方 LLVM/MLIR CMake 体系构建。
+- 必须具备：
+  - 自定义 dialect 注册能力
+  - pass 注册能力
+  - 编译器 driver/tool 入口
+- 必须能够消费 bridge 层导出的输入并形成 MLIR module。
 
-### R6. Triton Backend
-系统必须提供一个逐步扩展的 Triton backend。
-
-**Acceptance criteria:**
-- Triton backend 第一批至少支持 `matmul`、`add`、`relu`。
-- `layernorm` 可以作为后续增强项。
-- Triton backend 后续必须支持部分 fused op，如 `fused linear + relu`、`fused linear + gelu`。
-
-### R7. Correctness Validation
-系统必须具备正确性验证能力。
+### R4. MLIR Dialect and IR Strategy
+系统必须明确以 MLIR dialect/module 作为正式中间表示主线。
 
 **Acceptance criteria:**
-- 对 FX 路线，输出必须可与 `PyTorch eager` 对齐。
-- 对 ONNX 路线，输出必须可与 `ONNXRuntime` 对齐。
-- 系统必须能比较误差并判断是否在允许范围内。
+- 自定义 dialect 至少能表达第一批目标算子。
+- dialect 设计必须能与 `func`、`arith`、`tensor`、`linalg`、`scf`、`LLVM` 等后续 lowering 路线兼容。
+- 当前 Python 自定义 IR 允许继续存在，但其角色是原型与桥接，不再是唯一主 IR。
 
-### R8. IR Dump
-系统必须支持 IR 可观测性。
-
-**Acceptance criteria:**
-- 必须能够输出原始 IR。
-- 必须能够输出优化后 IR。
-- 必须能够输出 backend lowered IR 或 execution plan。
-
-### R9. Benchmark
-系统必须支持性能评测。
+### R5. MLIR Pass Pipeline
+核心优化 pass 必须作为 MLIR 主链路的硬要求。
 
 **Acceptance criteria:**
-- 至少支持 `eager baseline`、`compiler CPU backend`、`Triton backend` 三类路径的对比。
-- benchmark 至少输出 `latency`。
-- 可选输出 `throughput` 和 `memory usage`。
+- 必须在 MLIR 中规划或实现：
+  - `canonicalize`
+  - `constant fold`
+  - `DCE`
+  - `fusion`
+- 这些 pass 不再被定义为“可选升级项”。
+- Python 原型中的同名 pass 可以继续保留，作为参考实现和行为对照。
+
+### R6. CPU Backend
+系统必须支持 `MLIR -> LLVM IR -> CPU` 的正式后端路线。
+
+**Acceptance criteria:**
+- 文档中必须把 `CPU via LLVM` 写成主后端之一。
+- Python CPU backend 继续保留，但定位为 reference backend。
+- 新主链路的 CPU 路线必须以 MLIR lowering 为目标，而不是只停留在 Python 解释执行。
+
+### R7. Triton/GPU Backend
+系统必须支持 `MLIR -> Triton/GPU lowering` 的主后端路线。
+
+**Acceptance criteria:**
+- 文档中必须把 Triton/GPU 作为与 CPU 同级的正式后端方向。
+- 第一版允许先做到 lowering plan、受限执行或热点算子 MVP。
+- fused op 必须被纳入 Triton/GPU 路线设计范围。
+
+### R8. Validation Harness
+系统必须有统一验证与评测层。
+
+**Acceptance criteria:**
+- Python harness 必须负责：
+  - eager/reference 对照
+  - ONNXRuntime 对照（当 ONNX 路线启用时）
+  - benchmark
+  - IR dump
+- 验证层必须能同时服务 Python 原型和 MLIR 主链路。
+
+### R9. IR Dump and Artifact Output
+系统必须支持分层 IR 可观测性。
+
+**Acceptance criteria:**
+- 必须能够输出：
+  - Python 原型 IR
+  - bridge 输出
+  - MLIR module 文本
+  - lowering plan 或后端中间产物
+- 优化前后 IR 必须可对照。
 
 ## Recommended Project Structure Requirements
-项目结构应至少覆盖以下模块：
-- `docs/`
-- `examples/`
+项目结构应采用双轨布局：
+
 - `frontend/`
 - `ir/`
 - `passes/`
 - `backend/cpu/`
-- `backend/triton/`
-- `runtime/`
+- `tools/`
 - `tests/`
 - `benchmarks/`
+- `compiler-mlir/`
+
+其中：
+
+- Python 目录负责桥接与验证
+- `compiler-mlir/` 负责正式 MLIR 编译器实现
 
 ## Staged Delivery Plan
 
-### Phase 1: 最小闭环
+### Phase A: 文档与架构重置
 **目标：**
-- 从 `PyTorch FX` 导入
-- 建立自定义 IR
-- 实现 CPU backend
-- 做 `constant fold + DCE`
+- 重写 `requirements/design/tasks`
+- 把 MLIR 提升为正式主链路
+- 明确目录结构、bridge 协议、后端路线
+
+**交付：**
+- 新版 SDD 文档
+- 新版项目 README
+
+### Phase B: MLIR 工程骨架
+**目标：**
+- 新增 `compiler-mlir/`
+- 接通官方 LLVM/MLIR CMake 体系
+- 提供自定义 dialect、pass 注册、driver tool 骨架
+
+**交付：**
+- 可构建的 out-of-tree MLIR skeleton
+- 最小 smoke test
+
+### Phase C: 前端桥接
+**目标：**
+- Python FX/ONNX -> bridge format
+- bridge format -> MLIR module
+
+**交付：**
+- bridge 导出工具
+- 样例模型桥接产物
+
+### Phase D: MLIR Pass
+**目标：**
+- 在 MLIR 轨中实现或规划：
+  - `constant fold`
+  - `canonicalize`
+  - `DCE`
+  - `fusion`
+
+**交付：**
+- MLIR pass pipeline
+- `mlir-opt` 级测试
+
+### Phase E: CPU 路线
+**目标：**
+- `MLIR -> LLVM IR`
 - 跑通 `MLP`
 
 **交付：**
-- 能从模型到 IR 到执行
-- 有正确性验证
+- CPU 正式后端闭环
 
-### Phase 2: 优化与可视化
+### Phase F: Triton/GPU 路线
 **目标：**
-- 加 `fusion`
-- 加 `IR dump`
-- 加 `benchmark`
-- 支持 `ONNX importer`
+- 对核心算子与 fused op 做 Triton/GPU lowering
 
 **交付：**
-- 优化前后 IR 对比
-- latency 对比
+- Triton/GPU 路线 MVP
 
-### Phase 3: Triton backend
+### Phase G: 统一验证
 **目标：**
-- 为核心算子生成 Triton kernel
-- 支持 fused op
-- 和 CPU backend 对照
+- Python harness 统一驱动
+- 正确性对照与 benchmark
 
 **交付：**
-- 有真实 GPU backend
-- 有 benchmark 提升
-
-### Phase 4: MLIR 升级版（可选）
-**目标：**
-- 输出 `MLIR 风格 IR`
-- 或把 IR pass 迁移到 `MLIR-based` 实现
-
-**交付：**
-- 项目具备从自定义 IR 迈向 MLIR 的清晰升级路径
-
-## Why This Project Is Recommended
-该项目之所以作为最终推荐题目，是因为它同时满足以下要求：
-- **真正全流程**：覆盖 import、IR、optimization、lowering、execution、validation
-- **难度可控**：通过限制算子和模型子集保证可完成性
-- **有扩展空间**：后续可接 MLIR、量化、更多后端、更多模型结构
-- **技术表达强**：能清晰体现编译器结构、图优化、IR 设计、kernel/backend 和性能验证能力
-
-## Project Name and One-Line Introduction
-**项目名：** `Mini AI Compiler`
-
-**一句话介绍：**
-> A small end-to-end AI compiler that imports ONNX / PyTorch FX graphs, lowers them into an intermediate representation, applies graph-level optimizations, and executes optimized kernels on CPU and Triton backends.
-
-## Recommended Engineering Order
-项目实施顺序必须遵循以下优先级：
-1. `PyTorch FX importer`
-2. `自定义 IR`
-3. `CPU interpreter backend`
-4. `constant fold / DCE`
-5. `fusion`
-6. `benchmark`
-7. `Triton backend`
-8. `MLIR 升级`
+- 双轨统一验证入口
 
 ## Open Questions
-- CPU backend 最终选择 `NumPy`、`PyTorch eager` 还是纯自定义解释执行？
-- `Layout / Memory Planning` 第一版只做元信息记录，还是实际引入 buffer reuse？
-- `MLIR IR` 路线是先做文本输出，还是直接在第二版引入更接近 dialect 的结构？
+- bridge format 第一版最终选择纯 MLIR 文本，还是保留一个结构化中间层？
+- Triton/GPU 路线第一批是直接对接 Triton dialect，还是先做可解释的 lowering plan？

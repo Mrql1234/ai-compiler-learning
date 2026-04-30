@@ -9,7 +9,7 @@ from ir.node import Node
 from ir.value import Value
 
 
-def print_mlir(graph: Graph) -> str:
+def print_mlir(graph: Graph, *, generic_ops: bool = False) -> str:
     lines = []
     signature = ", ".join(_format_block_arg(index, value) for index, value in enumerate(graph.inputs))
     lines.append(f"module {{")
@@ -21,7 +21,7 @@ def print_mlir(graph: Graph) -> str:
     for node in graph.nodes:
         result_names = [_name_for_value(value, names) for value in node.outputs]
         operand_names = [_name_for_value(value, names) for value in node.inputs]
-        lines.extend(_print_node(node, result_names, operand_names))
+        lines.extend(_print_node(node, result_names, operand_names, generic_ops=generic_ops))
 
     return_operands = ", ".join(_name_for_value(value, names) for value in graph.outputs)
     return_types = ", ".join(_format_value_type(value) for value in graph.outputs)
@@ -31,14 +31,26 @@ def print_mlir(graph: Graph) -> str:
     return "\n".join(lines)
 
 
-def _print_node(node: Node, result_names: list[str], operand_names: list[str]) -> list[str]:
+def _print_node(
+    node: Node,
+    result_names: list[str],
+    operand_names: list[str],
+    *,
+    generic_ops: bool = False,
+) -> list[str]:
     result_prefix = ", ".join(result_names)
     result_suffix = _format_result_types(node.outputs)
     op_name = f"mini.{node.op_type}"
+    generic_op_name = f'"{op_name}"'
 
     if node.op_type == "constant":
         value = node.attrs["value"]
         attr_text = _format_dense_attr(value)
+        if generic_ops:
+            return [
+                f"    {result_prefix} = {generic_op_name}() "
+                f"{{value = {attr_text} : {result_suffix}}} : () -> {result_suffix}"
+            ]
         return [f"    {result_prefix} = {op_name} {attr_text} : {result_suffix}"]
 
     if node.attrs:
@@ -49,6 +61,10 @@ def _print_node(node: Node, result_names: list[str], operand_names: list[str]) -
 
     operand_text = ", ".join(operand_names)
     operand_types = ", ".join(_format_value_type(value) for value in node.inputs)
+    if generic_ops:
+        return [
+            f"    {result_prefix} = {generic_op_name}({operand_text}){attr_text} : ({operand_types}) -> {result_suffix}"
+        ]
     return [
         f"    {result_prefix} = {op_name} {operand_text}{attr_text} : ({operand_types}) -> {result_suffix}"
     ]

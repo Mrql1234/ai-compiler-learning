@@ -17,8 +17,8 @@ def write_graph(graph: Graph, path: str | Path) -> Path:
     return output_path
 
 
-def write_mlir(graph: Graph, path: str | Path) -> Path:
+def write_mlir(graph: Graph, path: str | Path, *, generic_ops: bool = False) -> Path:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(print_mlir(graph), encoding="utf-8")
+    output_path.write_text(print_mlir(graph, generic_ops=generic_ops), encoding="utf-8")
     return output_path

@@ -1,335 +1,266 @@
-﻿# Design: Mini AI Compiler
+# Design: Mini AI Compiler
 
 ## Overview
-本设计严格对应项目题目：**Mini AI Compiler: From ONNX / PyTorch FX to MLIR IR, Optimized CPU/Triton Execution**。
+`Mini AI Compiler` 现在采用双轨架构：
 
-实现策略采用“先闭环、后增强、再升级”的路线：
-- 第一阶段以 `PyTorch FX + 自定义 IR + CPU backend + constant fold / DCE` 跑通最小闭环
-- 第二阶段加入 `fusion + IR dump + benchmark + ONNX importer`
-- 第三阶段引入 `Triton backend`
-- 第四阶段再升级到 `MLIR 风格 IR` 或 `MLIR-based pass`
+- **Python 轨**
+  - 保留现有原型实现
+  - 负责 `FX / ONNX` 导入、图规范化、bridge 导出、reference 执行、验证与 benchmark
+- **MLIR 轨**
+  - 新增 `compiler-mlir/` out-of-tree C++ 子工程
+  - 作为正式编译器主线
+  - 负责 dialect、pass、lowering 与后端路线
 
-这样做的原因是：自定义 IR 更适合第一版快速掌控全流程，而 MLIR 更适合作为第二层技术深度升级。
+主链路改为：
+
+`PyTorch FX / ONNX -> Python bridge -> MLIR module/dialect -> MLIR passes -> CPU(LLVM) + Triton/GPU lowering -> execution + validation`
 
 ## Design Principles
-- 先保证完整编译链路能运行，再逐步提升技术深度。
-- 通过限制算子和模型子集控制复杂度。
-- 所有前端共享统一 IR。
-- 所有优化基于统一 IR，而不是分散在 importer 或 backend 内。
-- CPU backend 作为正确性基线。
-- Triton backend 作为性能与 GPU lowering 路线。
-- MLIR 作为后续升级方向，而不是第一阶段阻塞项。
-
-## Supported Scope
-
-### Operator Subset
-初版围绕以下算子构建：
-- `MatMul`
-- `Add`
-- `Mul`
-- `Relu`
-- `Gelu`
-- `LayerNorm`
-- `Softmax`
-- `Transpose`
-- `Reshape`
-
-### Model Subset
-初版围绕以下模型形态构建：
-- `MLP / FFN`
-- `单层 Attention Block 的简化版`
+- MLIR 是正式主 IR，不再只是后续升级项。
+- Python 原型继续保留，但角色变为桥接与 reference harness。
+- 文档、目录结构、测试与工具链都要体现双轨架构，而不是把 MLIR 挂在原型后面。
+- CPU 和 Triton/GPU 在设计上是同级主后端，只是实现节奏可以不同。
 
 ## System Architecture
 
-### 1. Frontend
-#### A. PyTorch FX Importer
-输入：PyTorch 小模型。
+### 1. Frontend Bridge Layer（Python）
+职责：
 
-流程：
-1. 使用 `torch.fx.symbolic_trace`
-2. 得到 FX graph
-3. 转换成内部 IR 节点
+- 导入外部模型图
+- 做图规范化
+- 生成 bridge 输出
+- 驱动验证和 benchmark
 
-定位：
-- Phase 1 主入口
-- 调试简单
-- 最适合作为 MVP 前端
+当前包含：
 
-#### B. ONNX Importer
-输入：导出的 ONNX 模型。
+- `frontend/fx_importer.py`
+- `frontend/onnx_importer.py`
+- `ir/`
+- `passes/`
+- `backend/cpu/`
+- `tools/`
 
-定位：
-- Phase 2 引入
-- 用于展示“通用前端”能力
-- 与 FX importer 共同映射到同一内部 IR
+推荐角色划分：
 
-### 2. Intermediate Representation
+- `frontend/`
+  - 模型读取与图规范化
+- `ir/`
+  - 教学原型 IR
+- `tools/export_mlir.py`
+  - 继续保留，作为 bridge / dump 工具
+- 新增 bridge 导出工具
+  - 面向 `compiler-mlir/` 的正式输入
 
-#### Option Chosen for Version 1
-第一版采用**简化自定义 IR**。
+### 2. MLIR Core Compiler（C++ out-of-tree）
+职责：
 
-建议对象：
-- `Graph`
-- `Node`
-- `TensorType`
-- `Attribute`
+- 注册自定义 dialect
+- 注册与运行 MLIR pass
+- 把高层表示 lower 到标准或目标相关 dialect
+- 生成 CPU / GPU 路线可继续消费的中间产物
 
-建议的节点结构至少包含：
+新目录：
 
 ```text
-op_type = "matmul"
-inputs = [...]
-outputs = [...]
-shape = ...
-dtype = ...
-attrs = ...
+compiler-mlir/
+  CMakeLists.txt
+  README.md
+  include/
+  lib/
+  tools/
+  test/
 ```
 
-这样设计的原因：
-- 更容易完全掌控
-- 更适合第一版做全流程
-- 开发速度快于直接上完整 MLIR 基础设施
+工程约束：
 
-#### MLIR Upgrade Path
-第二版及以后有两个方向：
-- 输出 `MLIR 风格 IR` 文本
-- 或逐步迁移到 `MLIR-based IR / pass`
+- 使用官方 LLVM/MLIR CMake 体系
+- 不直接改造 `projects/mlir-passes/`
+- 可以复用 `projects/mlir-passes/` 的经验与 pass 结构设计
 
-设计约束：
-- 当前 IR 必须具备向 MLIR 概念映射的清晰路径
-- 不允许把内部结构设计成只能服务单一 backend 的临时脚本格式
+### 3. Dialect Strategy
+第一版采用 `Mini` 自定义 dialect 作为高层入口。
 
-### 3. Optimization Layer
-系统至少需要四个 pass。
+它至少要能表达：
 
-#### Pass 1: Constant Folding
-示例：
-- `Add(Const, Const) -> Const`
-- `Mul(Const, Const) -> Const`
+- `matmul`
+- `add`
+- `mul`
+- `relu`
+- `reshape`
+- `transpose`
 
-职责：
-- 在图优化阶段提前计算常量表达式
-- 减少运行时算子数量
+后续逐步扩展到：
 
-#### Pass 2: Dead Code Elimination
-职责：
-- 删除无用户的中间结果
-- 删除不影响最终输出的节点
+- `gelu`
+- `layernorm`
+- `softmax`
+- fused op
 
-#### Pass 3: Operator Fusion
-典型融合模式：
-- `MatMul + Add + Relu`
-- `MatMul + Add + Gelu`
+设计目标不是一开始就把所有 op 都 fully custom，而是建立一条清晰路径：
 
-融合结果示例：
-- `fused_linear_relu`
-- `fused_linear_gelu`
+- high-level mini dialect
+- -> `arith/tensor/linalg/scf`
+- -> `LLVM` 或 `GPU/Triton` 相关路径
 
-#### Pass 4: Layout / Memory Planning
-第一版至少做一个轻量版本，支持以下之一或组合：
-- 决定 tensor buffer 的分配顺序
-- 做简单 inplace / buffer reuse
-- 记录 tensor layout，如 `row-major`
+### 4. Pass Pipeline Strategy
+正式 pass 主线落在 MLIR 工程中。
 
-### 4. Backend Layer
+第一批 pass 设计为：
+
+- `canonicalize`
+- `constant fold`
+- `DCE`
+- `fusion`
+
+Python 侧现有 pass 的角色：
+
+- 行为原型
+- 教学参考
+- 基线对照
+
+MLIR 侧 pass 的角色：
+
+- 正式优化链路
+- 面向真实 lowering 的实现
+
+### 5. Backend Strategy
 
 #### CPU Backend
-第一版先实现 reference backend。
+正式路线：
 
-可选实现方式：
-- `NumPy`
-- `PyTorch eager`
-- 自定义解释器
+- `MLIR -> LLVM IR -> CPU execution`
 
-核心作用：
-- 验证正确性
-- 作为 Triton backend 的对照基线
+当前 Python CPU backend 继续保留：
 
-#### Triton Backend
-按阶段渐进支持：
-- 第一批：`matmul`、`add`、`relu`
-- 后续增强：`layernorm`
-- 再后续：
-  - `fused linear + relu`
-  - `fused linear + gelu`
+- 用于 reference 执行
+- 用于语义对照
 
-### 5. Validation Layer
+#### Triton/GPU Backend
+正式路线：
 
-#### Correctness Validation
-必须与以下路径做对照：
-- `PyTorch eager`
-- `ONNXRuntime`（当 ONNX 路线启用时）
+- `MLIR -> Triton/GPU lowering`
 
-验证内容：
-- 输出误差
-- 优化前后语义一致性
-- CPU / Triton 结果一致性
+第一阶段允许先实现：
 
-#### IR Dump
-必须输出：
-- 原始 IR
-- 优化后 IR
-- backend lowered IR 或 execution plan
+- lowering plan
+- 受限可执行路径
+- 热点算子 MVP
 
-#### Benchmark
-至少比较：
-- `eager baseline`
-- `compiler CPU backend`
-- `Triton backend`
+第二阶段再逐步扩展：
 
-指标：
-- `latency`
-- `throughput`（可选）
-- `memory usage`（可选）
+- fused op
+- 更多算子
+- 更真实的执行路径
+
+### 6. Validation Harness
+Python 继续承担统一验证层角色。
+
+职责：
+
+- 调用 eager baseline
+- 调用 Python reference backend
+- 调用 `compiler-mlir` toolchain
+- 统一做：
+  - correctness 对照
+  - benchmark
+  - artifact dump
+
+这意味着后续 `tools/` 应逐步具备：
+
+- 导出 bridge 输入
+- 调用 MLIR tool
+- 收集结果
+- 对照 eager/reference 输出
+
+## Bridge Format Strategy
+第一版桥接优先采用**文本桥接**。
+
+推荐顺序：
+
+1. Python 输出 MLIR 文本或 bridge 文本
+2. `compiler-mlir` 解析 bridge 输入
+3. 构建 MLIR module
+
+这样做的原因：
+
+- 实现快
+- 可读性强
+- 易测试
+- 易 debug
+
+后续允许升级为：
+
+- JSON/Proto bridge
+- in-memory API
+
+但这些不作为当前第一批实现的前提。
 
 ## Proposed Directory Structure
 
 ```text
 mini-ai-compiler/
-├── README.md
-├── docs/
-│   ├── architecture.md
-│   ├── ir-design.md
-│   ├── pass-design.md
-│   └── benchmark.md
-├── examples/
-│   ├── mlp.py
-│   ├── attention_block.py
-│   └── export_onnx.py
-├── frontend/
-│   ├── fx_importer.py
-│   └── onnx_importer.py
-├── ir/
-│   ├── graph.py
-│   ├── node.py
-│   ├── types.py
-│   └── printer.py
-├── passes/
-│   ├── constant_fold.py
-│   ├── dce.py
-│   ├── fusion.py
-│   └── memory_plan.py
-├── backend/
-│   ├── cpu/
-│   │   └── executor.py
-│   └── triton/
-│       ├── kernels.py
-│       └── executor.py
-├── runtime/
-│   ├── tensor.py
-│   └── memory.py
-├── tests/
-│   ├── test_frontend.py
-│   ├── test_passes.py
-│   ├── test_cpu_backend.py
-│   └── test_triton_backend.py
-└── benchmarks/
-    └── bench_mlp.py
+  README.md
+  requirements.md
+  design.md
+  tasks.md
+  frontend/                # Python bridge / importer / normalization
+  ir/                      # Python prototype IR
+  passes/                  # Python prototype pass reference
+  backend/cpu/             # Python reference backend
+  tools/                   # bridge export / validation / benchmark / dump
+  tests/
+  benchmarks/
+  compiler-mlir/           # out-of-tree MLIR C++ project
+    CMakeLists.txt
+    README.md
+    include/
+    lib/
+    tools/
+    test/
 ```
 
 ## Staged Implementation Plan
 
-### Phase 1: 最小闭环
-目标：
-- 从 `PyTorch FX` 导入
-- 建立自定义 IR
-- 实现 CPU backend
-- 做 `constant fold + DCE`
+### Phase A: 文档与架构重置
+- 重写 `requirements.md`
+- 重写 `design.md`
+- 重写 `tasks.md`
+- 更新 `README.md`
+
+### Phase B: MLIR 工程骨架
+- 新增 `compiler-mlir/`
+- 接通 CMake
+- 提供 dialect / pass / tool skeleton
+- 提供 smoke test
+
+### Phase C: 前端桥接
+- Python FX/ONNX -> bridge text
+- bridge text -> MLIR module
+
+### Phase D: MLIR Pass
+- canonicalize
+- constant fold
+- DCE
+- fusion
+
+### Phase E: CPU 路线
+- lower 到 `LLVM IR`
 - 跑通 `MLP`
 
-交付：
-- 能从模型到 IR 到执行
-- 有正确性验证
+### Phase F: Triton/GPU 路线
+- lowering 到 Triton/GPU 相关路径
+- 支持核心算子与 fused op
 
-设计说明：
-- 这一阶段不先做 MLIR、不先做 Triton、不先做量化
-- 重点是“真正把闭环跑起来”
+### Phase G: 统一验证
+- Python harness 调用 MLIR 主工程
+- 正确性验证
+- benchmark
 
-### Phase 2: 优化与可视化
-目标：
-- 加 `fusion`
-- 加 `IR dump`
-- 加 `benchmark`
-- 支持 `ONNX importer`
-
-交付：
-- 优化前后 IR 对比
-- latency 对比
-
-设计说明：
-- 这一阶段开始体现“编译器展示力”
-- 让项目不只是能跑，还能讲清楚优化做了什么
-
-### Phase 3: Triton backend
-目标：
-- 为核心算子生成 Triton kernel
-- 支持 fused op
-- 和 CPU backend 对照
-
-交付：
-- 有真实 GPU backend
-- 有 benchmark 提升
-
-设计说明：
-- 这一步把项目从“图优化器”升级为“真正有后端 lowering 的 AI 编译器”
-
-### Phase 4: MLIR 升级版（可选）
-目标：
-- 输出 `MLIR 风格 IR`
-- 或把 IR pass 迁移到 `MLIR-based` 实现
-
-设计说明：
-- 这个阶段不是 MVP 必须项
-- 但它能显著提高项目技术深度和 MLIR 相关性
-- 当前推荐的过渡方案不是立刻接入完整 MLIR C++ API，而是先在 Python IR 上引入
-  `Pattern + Rewriter + Greedy Driver` 这类 MLIR 风格重写结构，让“pass 如何从命令式遍历
-  迁移到声明式重写”这件事先变得可见、可测试、可讲解
-
-## Why This Design
-这个设计被选中，是因为它同时满足：
-
-### 1. 真正全流程
-覆盖：
-- import
-- IR
-- optimization
-- lowering
-- execution
-- validation
-
-### 2. 难度可控
-- 通过限制算子和模型子集控制范围
-- 通过阶段化设计减少一次性复杂度
-
-### 3. 有扩展空间
-后续可以继续加入：
-- MLIR
-- quantization
-- 更多 backend
-- 更复杂的 attention / transformer
-
-### 4. 简历和表达强
-这个项目能够同时体现：
-- 编译器结构理解
-- 图优化能力
-- IR 设计能力
-- backend / kernel 理解
-- benchmark 与验证意识
-
-## Execution Order
-工程执行顺序必须保持为：
-1. `PyTorch FX importer`
-2. `自定义 IR`
-3. `CPU interpreter backend`
-4. `constant fold / DCE`
-5. `fusion`
-6. `benchmark`
-7. `Triton backend`
-8. `MLIR 升级`
-
-## Next Step
-下一份产物建议是 `tasks.md`，把 Phase 1 拆成可直接动手的文件级任务，例如：
-- `fx_importer.py` 要先支持哪些 node
-- `graph.py / node.py / types.py` 要先定义哪些字段
-- `executor.py` 第一版如何执行 `matmul/add/relu`
-- `constant_fold.py` 与 `dce.py` 第一版覆盖哪些规则
+## Notes on Current Repo
+- `projects/mlir-passes/` 是学习与实验资产，不直接等于新主工程。
+- 当前 `mini-ai-compiler` Python 原型已经具备：
+  - 自定义 IR
+  - Python pass
+  - CPU reference backend
+  - MLIR 风格文本导出
+- 新设计不是删除这些内容，而是重新定义它们在整体架构中的位置。
