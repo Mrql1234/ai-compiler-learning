@@ -1,5 +1,6 @@
 #include "MiniCompiler/MiniDialect.h"
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 
 using namespace mlir;
@@ -27,7 +28,10 @@ LogicalResult ConstantOp::verify() {
   Attribute valueAttr = getValue();
   if (!valueAttr)
     return emitOpError("requires a typed 'value' attribute");
-  if (valueAttr.getType() != getOutput().getType())
+  auto elementsAttr = dyn_cast<DenseElementsAttr>(valueAttr);
+  if (!elementsAttr)
+    return emitOpError("requires a dense typed 'value' attribute");
+  if (elementsAttr.getType() != getOutput().getType())
     return emitOpError("requires 'value' attribute type to match result type");
   return success();
 }

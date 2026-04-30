@@ -1,0 +1,10 @@
+-std=gnu++17
+-Iinclude
+-I/home/ql/code/llvm_clang_static_analyzer/llvm/include
+-I/home/ql/code/llvm_clang_static_analyzer/mlir/include
+-I/home/ql/code/llvm_clang_static_analyzer/build-mlir/include
+-I/home/ql/code/llvm_clang_static_analyzer/build-mlir/tools/mlir/include
+-D_GNU_SOURCE
+-D__STDC_CONSTANT_MACROS
+-D__STDC_FORMAT_MACROS
+-D__STDC_LIMIT_MACROS

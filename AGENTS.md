@@ -337,3 +337,134 @@ MLIR è½¨å½“å‰åˆ™å·²æ–°å¢ï¼š
 - `README.md`
 
 é¿å…ä»£ç å’Œæ–‡æ¡£é•¿æœŸè„±èŠ‚ã€‚
+
+---
+
+## 9. Cursor / clangd / WSL ÅäÖÃÔ¼¶¨
+
+ÕâÒ»½ÚÊÇÕë¶Ô `projects/mini-ai-compiler/compiler-mlir/` ºÍ `projects/mlir-passes/` µÄ C++/MLIR ¿ª·¢»·¾³Ô¼¶¨£¬Ä¿µÄÊÇ±ÜÃâ¡°ÀàÌø×ªµ½´íÎóÍ·ÎÄ¼ş¡±¡°clangd ¶Á´í compile_commands.json¡±¡°Ã÷Ã÷ÔÚ WSL ÀïÈ´ÓÃÁË apt °æË÷Òı¡±ÕâÀàÎÊÌâ¡£
+
+### 9.1 ±ØĞëÊ¹ÓÃ WSL Remote£¬¶ø²»ÊÇ `\\wsl$` ±¾µØÂ·¾¶Ä£Ê½
+
+- ÕıÈ··½Ê½£º
+  - ÔÚ Cursor ×óÏÂ½Ç¿´µ½ `WSL: Ubuntu-22.04`
+  - ÒÔ Remote-WSL ·½Ê½´ò¿ª `/home/ql/code/ai-compiler-learning`
+- ²»ÍÆ¼ö·½Ê½£º
+  - Ö±½ÓÓÃ Windows ±¾µØ´°¿Ú´ò¿ª `\\wsl$\\Ubuntu-22.04\\home\\ql\\code\\ai-compiler-learning`
+
+Ô­Òò£º
+
+- ±¾²Ö¿âÀïµÄ clangd / CMake / LLVM / MLIR Í·ÎÄ¼şÂ·¾¶¶¼ÊÇ Linux Â·¾¶
+- Ö»ÓĞÕæÕıµÄ WSL Remote Ä£Ê½£¬clangd ²Å»áÎÈ¶¨°´ Linux »·¾³½âÎö
+
+### 9.2 ²»ÒªÔÚÕû¸ö¹¤×÷ÇøÀïĞ´ËÀÈ«¾Ö `--compile-commands-dir`
+
+Ôø¾­²È¹ıµÄ¿Ó£º
+
+- `.vscode/settings.json` ÀïÈç¹ûĞ´ËÀ£º
+  - `--compile-commands-dir=${workspaceFolder}/projects/mlir-passes/build-wsl`
+- ÄÇÃ´Õû¸ö²Ö¿âËùÓĞ C++ ÎÄ¼ş¶¼»á±» clangd Ç¿ÖÆ°´ `mlir-passes` µÄ±àÒëÊı¾İ¿âÍÆ¶Ï
+- ½á¹û»áµ¼ÖÂ£º
+  - `compiler-mlir` µÄÎÄ¼ş±»´íÎóµØ¡°ÍÆ¶Ï×Ô¡± `projects/mlir-passes/...`
+  - Ìø×ªºÍÕï¶ÏÅÜµ½ apt °æ LLVM/MLIR Í·ÎÄ¼ş
+
+µ±Ç°Ô¼¶¨£º
+
+- `clangd.arguments` Àï²»ÒªÔÙÉèÖÃÈ«¾Ö `--compile-commands-dir`
+- ÈÃÃ¿¸ö×ÓÏîÄ¿Í¨¹ı×Ô¼ºµÄ `.clangd` + `compile_commands.json` ¾ö¶¨±àÒëÊı¾İ¿â
+
+### 9.3 `compiler-mlir` Ó¦Ê¹ÓÃÄÄÌ× LLVM/MLIR
+
+`projects/mini-ai-compiler/compiler-mlir/` µ±Ç°Ó¦°ó¶¨µ½Ô´Âë°æ LLVM/MLIR£¬¶ø²»ÊÇ apt °æ¡£
+
+ÕıÈ·À´Ô´£º
+
+- LLVM Ô´Âë£º
+  - `/home/ql/code/llvm_clang_static_analyzer/llvm`
+- MLIR Ô´Âë£º
+  - `/home/ql/code/llvm_clang_static_analyzer/mlir`
+- MLIR build£º
+  - `/home/ql/code/llvm_clang_static_analyzer/build-mlir`
+
+ÕıÈ·µÄ `compiler-mlir` CMake ÅäÖÃ£º
+
+- `LLVM_DIR=/home/ql/code/llvm_clang_static_analyzer/build-mlir/lib/cmake/llvm`
+- `MLIR_DIR=/home/ql/code/llvm_clang_static_analyzer/build-mlir/lib/cmake/mlir`
+
+ÖØĞÂÅäÖÃÃüÁî£º
+
+- `cd ~/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir`
+- `cmake -S . -B build -G Ninja -DLLVM_DIR=/home/ql/code/llvm_clang_static_analyzer/build-mlir/lib/cmake/llvm -DMLIR_DIR=/home/ql/code/llvm_clang_static_analyzer/build-mlir/lib/cmake/mlir`
+- `cmake --build build -j2`
+
+### 9.4 `compiler-mlir` µ±Ç° clangd ÅäÖÃÀ´Ô´
+
+`projects/mini-ai-compiler/compiler-mlir/` µ±Ç°Ö÷ÒªÒÀÀµÈı´¦£º
+
+- ¸ùÄ¿Â¼ `.clangd`
+  - Õë¶Ô `projects/mini-ai-compiler/compiler-mlir/.*` Ìí¼ÓÔ´Âë°æ LLVM/MLIR include
+- `projects/mini-ai-compiler/compiler-mlir/.clangd`
+  - Ö¸¶¨ `CompilationDatabase: build`
+- `projects/mini-ai-compiler/compiler-mlir/build/compile_commands.json`
+  - ÕæÕı¾ö¶¨Ã¿¸ö `.cpp` ÎÄ¼şµÄ±àÒëÃüÁî
+
+´ËÍâ»¹ÓĞ£º
+
+- `projects/mini-ai-compiler/compiler-mlir/compile_flags.txt`
+  - ×÷Îª fallback flags
+  - Ò²±ØĞëÖ¸Ïò `llvm_clang_static_analyzer`£¬²»ÄÜ²ĞÁô `/usr/lib/llvm-15/include`
+
+### 9.5 ÈçºÎÅĞ¶Ï clangd µ±Ç°ÊÇ·ñÕæµÄ×ß¶ÔÁË
+
+¿´ clangd ÈÕÖ¾Ê±£¬ÖØµã¼ì²é£º
+
+- ²»ÄÜÔÙ³öÏÖ£º
+  - `--compile-commands-dir=.../projects/mlir-passes/build-wsl`
+- ´ò¿ª `compiler-mlir` ÎÄ¼şÊ±£¬Ó¦¿´µ½£º
+  - `Loaded compilation database from /home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/build/compile_commands.json`
+- ´¦Àí `MiniDialect.cpp` µÈÎÄ¼şÊ±£¬±àÒëÃüÁîÓ¦°üº¬£º
+  - `/home/ql/code/llvm_clang_static_analyzer/llvm/include`
+  - `/home/ql/code/llvm_clang_static_analyzer/mlir/include`
+  - `/home/ql/code/llvm_clang_static_analyzer/build-mlir/include`
+
+Èç¹ûÈÕÖ¾Àï³öÏÖ£º
+
+- `building file ... MiniDialect.cpp with command inferred from ... projects/mlir-passes/...`
+
+ËµÃ÷ clangd ÈÔÔÚ´íÎó¸´ÓÃ `mlir-passes` µÄ±àÒëÊı¾İ¿â¡£
+
+### 9.6 Í·ÎÄ¼şÖ±½Ó°üº¬Ô­Ôò
+
+¶ÔÓÚ `compiler-mlir` µÄ C++ ÎÄ¼ş£º
+
+- ²»ÒªÒÀÀµ¡°´«µİ include Ç¡ºÃ¿ÉÓÃ¡±
+- Ä³¸ö·ûºÅÔÚµ±Ç° `.cpp` ÀïÖ±½ÓÊ¹ÓÃÁË£¬¾ÍÓ¦ÏÔÊ½°üº¬¶ÔÓ¦Í·ÎÄ¼ş
+
+Ô­Òò£º
+
+- ÕæÕı±àÒëÓĞÊ±ÒòÎª´«µİ°üº¬¡°½ÄĞÒÍ¨¹ı¡±
+- µ« clangd µÄÓïÒå·ÖÎö¸üÈİÒ×ÒòÎªÈ±ÉÙÖ±½ÓÍ·ÎÄ¼ş¶ø³öÏÖ¼Ù±¨´í¡¢Ìø×ªÒì³£
+
+ÀıÈç±¾ÏîÄ¿ÖĞ£º
+
+- `MiniDialect.cpp` Ê¹ÓÃ attribute Ïà¹ØÀàĞÍÊ±£¬ĞèÒªÏÔÊ½°üº¬£º
+  - `mlir/IR/BuiltinAttributes.h`
+
+### 9.7 Èç¹û clangd / Ìø×ªÔÙ´ÎÒì³££¬½¨ÒéÅÅ²éË³Ğò
+
+1. È·ÈÏ Cursor ×óÏÂ½ÇÊÇ·ñÊÇ `WSL: Ubuntu-22.04`
+2. ¼ì²é `.vscode/settings.json` ÊÇ·ñÓÖĞ´ÈëÁËÈ«¾Ö `--compile-commands-dir`
+3. ¼ì²é `compiler-mlir/build/compile_commands.json` ÊÇ·ñÈÔÖ¸ÏòÔ´Âë°æ LLVM/MLIR
+4. ¼ì²é¸ùÄ¿Â¼ `.clangd` ÊÇ·ñÎó¼ÓÁË `/usr/lib/llvm-15/include`
+5. ¼ì²é `projects/mini-ai-compiler/compiler-mlir/compile_flags.txt`
+6. ÖØÆô clangd£º
+   - `clangd: Restart language server`
+7. ÈôÈÔÒì³££¬ÔÙÇå»º´æ£º
+   - WSL: `/home/ql/.cache/clangd`
+   - Cursor workspaceStorage ÖĞ¶ÔÓ¦µ±Ç°¹¤×÷ÇøµÄÄ¿Â¼
+
+### 9.8 µ±Ç°ÒÑÖª½áÂÛ
+
+- `projects/mlir-passes/` ¿ÉÒÔ¼ÌĞøÊ¹ÓÃ apt °æ / ÏÖÓĞ `build-wsl`
+- `projects/mini-ai-compiler/compiler-mlir/` Ó¦ÓÅÏÈÊ¹ÓÃ `llvm_clang_static_analyzer/build-mlir`
+- Í¬Ò»²Ö¿âÏÂÓĞ¶à¸ö C++ ×ÓÏîÄ¿Ê±£¬clangd ±ØĞë°´¡°×ÓÏîÄ¿¸÷×ÔµÄÊı¾İ¿â¡±¹¤×÷£¬²»ÄÜÓÃÒ»¸öÈ«¾Ö `compile-commands-dir` Ç¿ĞĞ¸²¸Ç

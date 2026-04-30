@@ -13,7 +13,6 @@
   "clangd.path": "/usr/bin/clangd-15",
   "clangd.arguments": [
     "--background-index",
-    "--compile-commands-dir=${workspaceFolder}/projects/mlir-passes/build-wsl",
     "--header-insertion=never",
     "--query-driver=/usr/bin/clang-15,/usr/bin/clang++-15"
   ],

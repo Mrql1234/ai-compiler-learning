@@ -24,8 +24,8 @@ struct FoldReluConstantPattern : public OpRewritePattern<ReluOp> {
     if (!constant)
       return failure();
 
-    auto denseAttr = constant.getValue().dyn_cast_or_null<DenseFPElementsAttr>();
-    auto resultType = op.getOutput().getType().dyn_cast<RankedTensorType>();
+    auto denseAttr = dyn_cast_or_null<DenseFPElementsAttr>(constant.getValue());
+    auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
     if (!denseAttr || !resultType || !resultType.getElementType().isF32())
       return failure();
 
@@ -67,7 +67,7 @@ struct MiniCanonicalizePass
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     patterns.add<FoldReluConstantPattern, FuseLinearReluPattern>(&getContext());
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
   StringRef getArgument() const final { return "mini-canonicalize"; }
@@ -81,7 +81,7 @@ struct MiniConstantFoldPass
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     patterns.add<FoldReluConstantPattern>(&getContext());
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
   StringRef getArgument() const final { return "mini-const-fold"; }
@@ -103,7 +103,7 @@ struct MiniFusionPass
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
     patterns.add<FuseLinearReluPattern>(&getContext());
-    if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns))))
+    if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
   StringRef getArgument() const final { return "mini-fusion"; }

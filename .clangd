@@ -1,0 +1,26 @@
+If:
+  PathMatch: ^projects/mlir-passes/.*
+CompileFlags:
+  CompilationDatabase: projects/mlir-passes/build-wsl
+Index:
+  Background: Build
+Diagnostics:
+  UnusedIncludes: Strict
+---
+If:
+  PathMatch: ^projects/mini-ai-compiler/compiler-mlir/.*
+CompileFlags:
+  CompilationDatabase: projects/mini-ai-compiler/compiler-mlir/build
+  Add:
+    - -I/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/include
+    - -I/home/ql/code/llvm_clang_static_analyzer/llvm/include
+    - -I/home/ql/code/llvm_clang_static_analyzer/mlir/include
+    - -I/home/ql/code/llvm_clang_static_analyzer/build-mlir/include
+    - -I/home/ql/code/llvm_clang_static_analyzer/build-mlir/tools/mlir/include
+    - -std=gnu++17
+    - -D_GNU_SOURCE
+    - -D__STDC_CONSTANT_MACROS
+    - -D__STDC_FORMAT_MACROS
+    - -D__STDC_LIMIT_MACROS
+Index:
+  Background: Build
