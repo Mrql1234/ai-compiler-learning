@@ -1,4 +1,4 @@
-// RUN: %mini_compiler_opt --allow-unregistered-dialect %s | FileCheck %s
+// RUN: %mini_compiler_opt %s | FileCheck %s
 
 module {
   func.func @smoke(%arg0: tensor<2x4xf32>) -> tensor<2x4xf32> {

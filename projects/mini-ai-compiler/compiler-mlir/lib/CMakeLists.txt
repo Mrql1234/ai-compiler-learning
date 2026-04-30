@@ -9,4 +9,6 @@ add_mlir_library(MiniCompilerMLIR
   MLIRFuncDialect
   MLIRIR
   MLIRPass
+  MLIRRewrite
+  MLIRTransforms
 )
