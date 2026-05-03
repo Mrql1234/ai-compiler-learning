@@ -6,9 +6,12 @@ add_mlir_library(MiniCompilerMLIR
   MLIRIR
 
   LINK_LIBS PUBLIC
+  MLIRArithDialect
   MLIRFuncDialect
   MLIRIR
+  MLIRLinalgDialect
   MLIRPass
   MLIRRewrite
+  MLIRTensorDialect
   MLIRTransforms
 )

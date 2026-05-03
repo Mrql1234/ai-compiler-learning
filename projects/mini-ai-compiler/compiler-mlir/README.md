@@ -13,14 +13,15 @@ This directory hosts the formal MLIR-native compiler track for `mini-ai-compiler
 
 ## Current Scope
 
-The current version is a bootstrap out-of-tree MLIR project skeleton.
+The current version has moved beyond a pure skeleton:
 
-It is intended to:
+It can now:
 
 - compile against an existing LLVM/MLIR build
-- parse `mini.*` operations through a registered dialect skeleton
-- provide pass registration hooks
-- provide a smoke-test tool entrypoint
+- parse and verify `mini.constant`, `mini.linear`, `mini.relu`, `mini.fused_linear_relu`
+- run mini canonicalization / fusion / constant-fold passes
+- lower `mini.*` ops to `linalg` / `arith` / `tensor`
+- continue into an experimental bufferized CPU-oriented path with standard MLIR passes
 
 ## Configure
 
@@ -31,9 +32,26 @@ cmake -S . -B build \
 cmake --build build
 ```
 
+## Useful Commands
+
+Lower mini ops to standard tensor/linalg dialects:
+
+```bash
+./build/bin/mini-compiler-opt --mini-lower-to-linalg test/lower_to_linalg.mlir
+```
+
+Continue one step further into bufferized IR:
+
+```bash
+./build/bin/mini-compiler-opt \
+  --mini-lower-to-linalg \
+  --one-shot-bufferize \
+  test/lower_to_bufferized.mlir
+```
+
 ## Expected Next Steps
 
-1. define bridge-text parsing path
-2. materialize `mini` ops beyond unknown-op skeleton behavior
-3. implement MLIR-native passes
-4. lower to LLVM and Triton/GPU paths
+1. stabilize function-boundary bufferization for the CPU route
+2. lower bufferized IR to LLVM dialect and execution support
+3. add more mini ops and MLIR-native optimization passes
+4. connect the Python bridge to emit stable MLIR input for this toolchain
