@@ -49,9 +49,30 @@ Continue one step further into bufferized IR:
   test/lower_to_bufferized.mlir
 ```
 
+Continue all the way to LLVM dialect on the CPU path:
+
+```bash
+./build/bin/mini-compiler-opt \
+  --mini-lower-to-linalg \
+  --one-shot-bufferize="bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map" \
+  --drop-equivalent-buffer-results \
+  --buffer-results-to-out-params \
+  --convert-bufferization-to-memref \
+  --convert-linalg-to-loops \
+  --convert-scf-to-cf \
+  --convert-cf-to-llvm \
+  --convert-arith-to-llvm \
+  --convert-index-to-llvm \
+  --expand-realloc \
+  --finalize-memref-to-llvm \
+  --convert-func-to-llvm \
+  --reconcile-unrealized-casts \
+  test/lower_to_llvm.mlir
+```
+
 ## Expected Next Steps
 
-1. stabilize function-boundary bufferization for the CPU route
-2. lower bufferized IR to LLVM dialect and execution support
+1. add execution support on top of the LLVM-dialect CPU path
+2. wrap the standard CPU lowering pipeline behind a project-local driver/preset
 3. add more mini ops and MLIR-native optimization passes
 4. connect the Python bridge to emit stable MLIR input for this toolchain
