@@ -10,9 +10,12 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include <algorithm>
+#include <cctype>
 
 using namespace mlir;
 
@@ -358,6 +361,31 @@ void registerMiniPasses() {
   PassRegistration<MiniDCEPass>();
   PassRegistration<MiniFusionPass>();
   PassRegistration<MiniLowerToLinalgPass>();
+}
+
+void registerMiniPassPipelines() {
+  PassPipelineRegistration<>(
+      "mini-cpu-lowering",
+      "Run the project CPU lowering pipeline from mini dialect to LLVM dialect",
+      [](OpPassManager &pm) {
+        const char *pipelineText =
+            "func.func(mini-lower-to-linalg),"
+            "one-shot-bufferize{bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map},"
+            "drop-equivalent-buffer-results,"
+            "buffer-results-to-out-params,"
+            "convert-bufferization-to-memref,"
+            "convert-linalg-to-loops,"
+            "convert-scf-to-cf,"
+            "convert-cf-to-llvm,"
+            "convert-arith-to-llvm,"
+            "convert-index-to-llvm,"
+            "expand-realloc,"
+            "finalize-memref-to-llvm,"
+            "convert-func-to-llvm,"
+            "reconcile-unrealized-casts";
+        if (failed(parsePassPipeline(pipelineText, pm)))
+          llvm::report_fatal_error("failed to parse mini-cpu-lowering pipeline");
+      });
 }
 
 } // namespace mini

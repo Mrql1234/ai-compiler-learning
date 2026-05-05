@@ -32,6 +32,11 @@ cmake -S . -B build \
 cmake --build build
 ```
 
+## Design Notes
+
+- Multi-backend lowering roadmap:
+  - `LOWERING_ROADMAP.md`
+
 ## Useful Commands
 
 Lower mini ops to standard tensor/linalg dialects:
@@ -52,27 +57,24 @@ Continue one step further into bufferized IR:
 Continue all the way to LLVM dialect on the CPU path:
 
 ```bash
-./build/bin/mini-compiler-opt \
-  --mini-lower-to-linalg \
-  --one-shot-bufferize="bufferize-function-boundaries function-boundary-type-conversion=identity-layout-map" \
-  --drop-equivalent-buffer-results \
-  --buffer-results-to-out-params \
-  --convert-bufferization-to-memref \
-  --convert-linalg-to-loops \
-  --convert-scf-to-cf \
-  --convert-cf-to-llvm \
-  --convert-arith-to-llvm \
-  --convert-index-to-llvm \
-  --expand-realloc \
-  --finalize-memref-to-llvm \
-  --convert-func-to-llvm \
-  --reconcile-unrealized-casts \
-  test/lower_to_llvm.mlir
+./build/bin/mini-compiler-opt --mini-cpu-lowering test/cpu_pipeline.mlir
 ```
+
+Translate the LLVM dialect output into textual LLVM IR:
+
+```bash
+./build/bin/mini-compiler-opt --mini-cpu-lowering test/cpu_pipeline.mlir \
+  | /path/to/matching/mlir-translate --mlir-to-llvmir
+```
+
+Important:
+
+- `mlir-translate` should come from the **same LLVM/MLIR build** as the one used to build `mini-compiler-opt`
+- mixing the custom source build with older system binaries can fail on newer LLVM dialect ops such as `llvm.mlir.poison`
 
 ## Expected Next Steps
 
 1. add execution support on top of the LLVM-dialect CPU path
-2. wrap the standard CPU lowering pipeline behind a project-local driver/preset
-3. add more mini ops and MLIR-native optimization passes
-4. connect the Python bridge to emit stable MLIR input for this toolchain
+2. add more mini ops and MLIR-native optimization passes
+3. connect the Python bridge to emit stable MLIR input for this toolchain
+4. expose reusable presets for GPU/Triton lowering too

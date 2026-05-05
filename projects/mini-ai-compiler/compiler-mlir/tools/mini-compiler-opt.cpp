@@ -28,6 +28,7 @@ int main(int argc, char **argv) {
                   mlir::scf::SCFDialect, mlir::tensor::TensorDialect>();
 
   mini::registerMiniPasses();
+  mini::registerMiniPassPipelines();
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "mini compiler optimizer\n", registry));

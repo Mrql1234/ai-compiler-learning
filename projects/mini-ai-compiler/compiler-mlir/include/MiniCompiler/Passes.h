@@ -13,6 +13,7 @@ std::unique_ptr<mlir::Pass> createMiniFusionPass();
 std::unique_ptr<mlir::Pass> createMiniLowerToLinalgPass();
 
 void registerMiniPasses();
+void registerMiniPassPipelines();
 
 } // namespace mini
 
