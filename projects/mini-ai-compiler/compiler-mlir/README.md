@@ -60,6 +60,18 @@ Continue all the way to LLVM dialect on the CPU path:
 ./build/bin/mini-compiler-opt --mini-cpu-lowering test/cpu_pipeline.mlir
 ```
 
+Run a lowered MLIR module through the local CPU JIT runner:
+
+```bash
+./build/bin/mini-compiler-runner test/cpu_runner_demo.mlir --entry-point-result=f32
+```
+
+Prepare `mini.*` programs for a later GPU/Triton route:
+
+```bash
+./build/bin/mini-compiler-opt --mini-gpu-prep test/gpu_prep.mlir
+```
+
 Translate the LLVM dialect output into textual LLVM IR:
 
 ```bash
@@ -74,7 +86,7 @@ Important:
 
 ## Expected Next Steps
 
-1. add execution support on top of the LLVM-dialect CPU path
+1. extend the runnable CPU path beyond the current demo entry
 2. add more mini ops and MLIR-native optimization passes
 3. connect the Python bridge to emit stable MLIR input for this toolchain
-4. expose reusable presets for GPU/Triton lowering too
+4. map `mini-gpu-prep` output into real GPU / Triton lowering passes

@@ -386,6 +386,19 @@ void registerMiniPassPipelines() {
         if (failed(parsePassPipeline(pipelineText, pm)))
           llvm::report_fatal_error("failed to parse mini-cpu-lowering pipeline");
       });
+
+  PassPipelineRegistration<>(
+      "mini-gpu-prep",
+      "Prepare mini dialect programs for later GPU/Triton mapping by lowering "
+      "to standard tensor/linalg dialects and cleaning up the IR",
+      [](OpPassManager &pm) {
+        const char *pipelineText =
+            "func.func(mini-canonicalize,mini-fusion,mini-lower-to-linalg),"
+            "canonicalize,"
+            "cse";
+        if (failed(parsePassPipeline(pipelineText, pm)))
+          llvm::report_fatal_error("failed to parse mini-gpu-prep pipeline");
+      });
 }
 
 } // namespace mini
