@@ -127,6 +127,17 @@ Python 侧必须作为前端桥接层和验证层，而不是未来唯一编译�
 - 第一版允许先做到 lowering plan、受限执行或热点算子 MVP。
 - fused op 必须被纳入 Triton/GPU 路线设计范围。
 
+### R7.1. Strategy Selection
+系统必须存在一层显式的 **strategy selection** 机制，用于决定算子或 fused op 应采用哪种 GPU 实现路径。
+
+**Acceptance criteria:**
+- 文档必须明确区分以下几类实现路径：
+  - generic MLIR GPU/NVVM lowering
+  - Triton-oriented lowering
+  - library-backed path（如 CUTLASS / cuBLAS）
+- 第一版允许采用规则式 strategy selection，不要求完整 cost model 或 autotuning。
+- `linear` / `matmul` / fused op 必须在待办或设计中被显式纳入 strategy selection 范围。
+
 ### R8. Validation Harness
 系统必须有统一验证与评测层。
 

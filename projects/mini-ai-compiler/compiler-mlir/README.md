@@ -36,6 +36,8 @@ cmake --build build
 
 - Multi-backend lowering roadmap:
   - `LOWERING_ROADMAP.md`
+- Local dev + cloud A10 workflow:
+  - `GPU_A10_WORKFLOW.md`
 
 ## Useful Commands
 
@@ -72,6 +74,24 @@ Prepare `mini.*` programs for a later GPU/Triton route:
 ./build/bin/mini-compiler-opt --mini-gpu-prep test/gpu_prep.mlir
 ```
 
+Lower further into GPU launch/module form without needing a local GPU:
+
+```bash
+./build/bin/mini-compiler-opt --mini-gpu-lowering test/gpu_prep.mlir
+```
+
+Preflight the cloud A10 NVVM toolchain:
+
+```bash
+./scripts/a10_preflight.sh
+```
+
+Run the staged A10 NVVM lowering pipeline:
+
+```bash
+./scripts/a10_lower_to_nvvm.sh test/gpu_prep.mlir
+```
+
 Translate the LLVM dialect output into textual LLVM IR:
 
 ```bash
@@ -89,4 +109,5 @@ Important:
 1. extend the runnable CPU path beyond the current demo entry
 2. add more mini ops and MLIR-native optimization passes
 3. connect the Python bridge to emit stable MLIR input for this toolchain
-4. map `mini-gpu-prep` output into real GPU / Triton lowering passes
+4. push `mini-gpu-lowering` toward cloud-side NVVM execution on A10
+5. map the same high-level ops into a Triton-oriented backend path

@@ -152,6 +152,27 @@ MLIR 侧 pass 的角色：
 - 更多算子
 - 更真实的执行路径
 
+### 5.1 Strategy Selection Layer
+在 CPU / GPU / Triton 等具体后端之前，需要一个显式的 **strategy selection** 层。
+
+它的职责是：
+
+- 决定某个高层 op 或 fused op 应该走哪条后端实现路径
+- 区分：
+  - generic MLIR GPU lowering
+  - Triton kernel lowering
+  - library-backed implementation（如 CUTLASS / cuBLAS）
+- 为后续的 cost model、autotune、hardware-aware 选择预留扩展点
+
+第一版不要求复杂的动态优选，但需要在架构上把这一层明确建模出来。
+
+第一批建议覆盖的对象：
+
+- `linear`
+- `matmul`
+- `fused_linear_relu`
+- 后续再扩展到 `softmax` / `layernorm`
+
 ### 6. Validation Harness
 Python 继续承担统一验证层角色。
 

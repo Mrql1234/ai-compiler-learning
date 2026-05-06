@@ -1,9 +1,12 @@
 #include "MiniCompiler/Passes.h"
 #include "MiniCompiler/MiniDialect.h"
 
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Linalg/Passes.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -12,6 +15,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
+#include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include <algorithm>
@@ -398,6 +402,31 @@ void registerMiniPassPipelines() {
             "cse";
         if (failed(parsePassPipeline(pipelineText, pm)))
           llvm::report_fatal_error("failed to parse mini-gpu-prep pipeline");
+      });
+
+  PassPipelineRegistration<>(
+      "mini-gpu-lowering",
+      "Lower mini dialect programs into a GPU-oriented IR path that reaches "
+      "gpu.launch/gpu.module without requiring a local GPU",
+      [](OpPassManager &pm) {
+        if (failed(parsePassPipeline(
+                "func.func(mini-canonicalize,mini-fusion,mini-lower-to-linalg),"
+                "canonicalize,cse,"
+                "one-shot-bufferize{bufferize-function-boundaries "
+                "function-boundary-type-conversion=identity-layout-map},"
+                "drop-equivalent-buffer-results,"
+                "buffer-results-to-out-params,"
+                "convert-bufferization-to-memref,"
+                "canonicalize,cse",
+                pm)))
+          llvm::report_fatal_error("failed to parse shared GPU prep pipeline");
+
+        pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
+        pm.addNestedPass<func::FuncOp>(createGpuMapParallelLoopsPass());
+        pm.addNestedPass<func::FuncOp>(createConvertParallelLoopToGpuPass());
+        pm.addPass(createGpuKernelOutliningPass());
+        pm.addPass(createCanonicalizerPass());
+        pm.addPass(createCSEPass());
       });
 }
 

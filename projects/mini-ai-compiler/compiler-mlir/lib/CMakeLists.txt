@@ -8,10 +8,13 @@ add_mlir_library(MiniCompilerMLIR
   LINK_LIBS PUBLIC
   MLIRArithDialect
   MLIRFuncDialect
+  MLIRGPUTransforms
   MLIRIR
   MLIRLinalgDialect
+  MLIRLinalgTransforms
   MLIRPass
   MLIRRewrite
+  MLIRSCFToGPU
   MLIRTensorDialect
   MLIRTransforms
 )
