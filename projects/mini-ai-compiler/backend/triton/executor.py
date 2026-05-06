@@ -38,6 +38,7 @@ class TritonExecutor:
             raise RuntimeError("Triton backend requires a CUDA-capable PyTorch runtime.")
 
         env: dict[str, Any] = {}
+        kernels_by_name = {spec.name: spec for spec in lowered.kernel_specs}
         for value in graph.inputs:
             env[value.name] = self._to_device_tensor(inputs[value.name])
 
@@ -47,6 +48,8 @@ class TritonExecutor:
                 continue
 
             args = [env[input_value.name] for input_value in node.inputs]
+            if node.name not in kernels_by_name:  # pragma: no cover
+                raise RuntimeError(f"Missing lowered kernel spec for node: {node.name}")
             if node.op_type == "matmul":
                 result = args[0] @ args[1]
             elif node.op_type == "add":

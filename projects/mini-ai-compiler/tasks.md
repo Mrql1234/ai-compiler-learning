@@ -42,12 +42,12 @@
 
 - [x] F1. 设计 `Mini -> Triton/GPU` lowering 路线
 - [x] F2. 先支持核心算子 GPU IR lowering
-- [ ] F3. 再支持 fused op lowering
-- [ ] F4. 添加 Triton/GPU 路线验证
+- [x] F3. 再支持 fused op lowering
+- [x] F4. 添加 Triton/GPU 路线验证
 - [x] F5. 打通 `mini-gpu-lowering` 到 `gpu.launch/gpu.module`
 - [ ] F6. 推进云端 A10 上的 `NVVM` / host LLVM 后半链
-- [ ] F7. 设计 strategy selection 层，区分 generic GPU / Triton / library-backed 路径
-- [ ] F8. 为 `linear` / `matmul` / fused op 建立基础策略规则
+- [x] F7. 设计 strategy selection 层，区分 generic GPU / Triton / library-backed 路径
+- [x] F8. 为 `linear` / `matmul` / fused op 建立基础策略规则
 
 ## Phase G：统一验证
 

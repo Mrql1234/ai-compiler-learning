@@ -16,6 +16,7 @@ The intended main pipeline is:
 - Prototype IR
 - Prototype passes
 - CPU reference backend
+- Triton/GPU strategy selection and lowering plan
 - Benchmark and dump tools
 
 ## MLIR Track
