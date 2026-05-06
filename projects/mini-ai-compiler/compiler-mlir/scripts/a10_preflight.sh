@@ -5,7 +5,31 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 MINI_BUILD="${MINI_BUILD:-${PROJECT_DIR}/build}"
-LLVM_MLIR_BUILD="${LLVM_MLIR_BUILD:-/home/ql/code/llvm_clang_static_analyzer/build-mlir}"
+LLVM_MLIR_BUILD="${LLVM_MLIR_BUILD:-}"
+
+resolve_llvm_mlir_build() {
+  local cache_path="${MINI_BUILD}/CMakeCache.txt"
+  local mlir_dir
+  if [[ -f "${cache_path}" ]]; then
+    mlir_dir="$(grep '^MLIR_DIR:' "${cache_path}" | cut -d= -f2- || true)"
+    if [[ -n "${mlir_dir}" ]]; then
+      dirname "$(dirname "$(dirname "${mlir_dir}")")"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+if [[ -z "${LLVM_MLIR_BUILD}" ]]; then
+  if ! LLVM_MLIR_BUILD="$(resolve_llvm_mlir_build)"; then
+    cat >&2 <<EOF
+[preflight] unable to determine LLVM_MLIR_BUILD automatically.
+
+Set LLVM_MLIR_BUILD explicitly or configure ${MINI_BUILD} with matching LLVM_DIR/MLIR_DIR.
+EOF
+    exit 1
+  fi
+fi
 
 MINI_OPT="${MINI_BUILD}/bin/mini-compiler-opt"
 MLIR_OPT="${LLVM_MLIR_BUILD}/bin/mlir-opt"

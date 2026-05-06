@@ -79,6 +79,11 @@ Recommended command entrypoints:
 ./scripts/a10_lower_to_nvvm.sh test/gpu_prep.mlir
 ```
 
+Both scripts first honor `LLVM_MLIR_BUILD` when set. Otherwise they try to
+derive the matching LLVM/MLIR build root from
+`compiler-mlir/build/CMakeCache.txt`, which is the preferred setup on the cloud
+host after configuring this subproject with `LLVM_DIR` and `MLIR_DIR`.
+
 For NVIDIA A10, the target chip is typically in the Ampere family. In practice,
 the exact `sm_*` target should be confirmed on the cloud server before fixing
 the final command.
