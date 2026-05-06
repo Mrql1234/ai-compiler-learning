@@ -28,7 +28,7 @@ module {
 // CHECK: llvm.mlir.global private constant
 // CHECK: llvm.func @lower_to_llvm
 // CHECK: llvm.call @malloc
-// CHECK: llvm.fadd
 // CHECK: llvm.fmul
+// CHECK: llvm.fadd
 // CHECK-NOT: "mini.linear"
 // CHECK-NOT: "mini.relu"

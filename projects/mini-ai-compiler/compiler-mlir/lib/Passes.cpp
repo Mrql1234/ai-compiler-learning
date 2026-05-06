@@ -4,9 +4,11 @@
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Passes.h"
-#include "mlir/Dialect/GPU/Transforms/Passes.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -337,6 +339,94 @@ struct MiniLowerToLinalgPass
   }
 };
 
+static SmallVector<Value> collectDynamicMemRefDims(Location loc, Value source,
+                                                   MemRefType type,
+                                                   OpBuilder &builder) {
+  SmallVector<Value> dynamicDims;
+  for (auto [index, dim] : llvm::enumerate(type.getShape())) {
+    if (ShapedType::isDynamic(dim))
+      dynamicDims.push_back(builder.create<memref::DimOp>(loc, source, index));
+  }
+  return dynamicDims;
+}
+
+struct MiniGpuHostSharedPass
+    : public PassWrapper<MiniGpuHostSharedPass, OperationPass<func::FuncOp>> {
+  StringRef getArgument() const final { return "mini-gpu-host-shared"; }
+  StringRef getDescription() const final {
+    return "Rewrite host-side memrefs used by gpu.launch_func into "
+           "gpu.alloc host_shared buffers";
+  }
+
+  Value materializeGpuVisibleCopy(Value source, gpu::LaunchFuncOp launch,
+                                  DenseMap<Value, Value> &cache) {
+    auto memrefType = dyn_cast<MemRefType>(source.getType());
+    if (!memrefType)
+      return {};
+    if (auto it = cache.find(source); it != cache.end())
+      return it->second;
+
+    OpBuilder builder(launch);
+    auto dynamicDims =
+        collectDynamicMemRefDims(launch.getLoc(), source, memrefType, builder);
+    auto sharedAlloc = builder.create<gpu::AllocOp>(
+        launch.getLoc(), memrefType,
+        /*asyncDependencies=*/ValueRange{},
+        /*dynamicSizes=*/dynamicDims,
+        /*symbolOperands=*/ValueRange{}, builder.getUnitAttr());
+    builder.create<memref::CopyOp>(launch.getLoc(), source,
+                                   sharedAlloc.getMemref());
+    cache[source] = sharedAlloc.getMemref();
+    return sharedAlloc.getMemref();
+  }
+
+  void runOnOperation() override {
+    func::FuncOp func = getOperation();
+    if (func.isExternal())
+      return;
+
+    SmallVector<memref::AllocOp> allocs;
+    func.walk([&](memref::AllocOp alloc) { allocs.push_back(alloc); });
+    for (memref::AllocOp alloc : allocs) {
+      bool needsGpuShared = llvm::any_of(alloc.getResult().getUsers(), [](Operation *user) {
+        return isa<gpu::LaunchFuncOp>(user);
+      });
+      if (!needsGpuShared)
+        continue;
+
+      OpBuilder builder(alloc);
+      auto sharedAlloc = builder.create<gpu::AllocOp>(
+          alloc.getLoc(), alloc.getType(),
+          /*asyncDependencies=*/ValueRange{},
+          /*dynamicSizes=*/alloc.getDynamicSizes(),
+          /*symbolOperands=*/alloc.getSymbolOperands(), builder.getUnitAttr());
+      alloc.getResult().replaceAllUsesWith(sharedAlloc.getMemref());
+      alloc.erase();
+    }
+
+    DenseMap<Value, Value> copiedGpuOperands;
+    SmallVector<gpu::LaunchFuncOp> launches;
+    func.walk([&](gpu::LaunchFuncOp launch) { launches.push_back(launch); });
+    for (gpu::LaunchFuncOp launch : launches) {
+      for (OpOperand &operand : launch->getOpOperands()) {
+        auto memrefType = dyn_cast<MemRefType>(operand.get().getType());
+        if (!memrefType)
+          continue;
+        if (operand.get().getDefiningOp<gpu::AllocOp>())
+          continue;
+        Value sharedValue =
+            materializeGpuVisibleCopy(operand.get(), launch, copiedGpuOperands);
+        if (!sharedValue) {
+          launch.emitError("failed to materialize host_shared GPU operand");
+          signalPassFailure();
+          return;
+        }
+        operand.set(sharedValue);
+      }
+    }
+  }
+};
+
 } // namespace
 
 std::unique_ptr<Pass> createMiniCanonicalizePass() {
@@ -364,6 +454,7 @@ void registerMiniPasses() {
   PassRegistration<MiniConstantFoldPass>();
   PassRegistration<MiniDCEPass>();
   PassRegistration<MiniFusionPass>();
+  PassRegistration<MiniGpuHostSharedPass>();
   PassRegistration<MiniLowerToLinalgPass>();
 }
 
@@ -425,6 +516,7 @@ void registerMiniPassPipelines() {
         pm.addNestedPass<func::FuncOp>(createGpuMapParallelLoopsPass());
         pm.addNestedPass<func::FuncOp>(createConvertParallelLoopToGpuPass());
         pm.addPass(createGpuKernelOutliningPass());
+        pm.addNestedPass<func::FuncOp>(std::make_unique<MiniGpuHostSharedPass>());
         pm.addPass(createCanonicalizerPass());
         pm.addPass(createCSEPass());
       });

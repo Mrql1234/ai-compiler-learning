@@ -13,7 +13,7 @@ module {
 // CHECK: llvm.func @malloc
 // CHECK: llvm.func @cpu_pipeline
 // CHECK: llvm.call @malloc
-// CHECK: llvm.fadd
 // CHECK: llvm.fmul
+// CHECK: llvm.fadd
 // CHECK-NOT: "mini.linear"
 // CHECK-NOT: "mini.relu"

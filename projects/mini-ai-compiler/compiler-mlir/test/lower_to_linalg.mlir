@@ -13,7 +13,7 @@ module {
 // CHECK: arith.constant
 // CHECK: tensor.empty
 // CHECK: linalg.fill
-// CHECK: linalg.matmul_transpose_b
+// CHECK: linalg.matmul
 // CHECK: linalg.generic
 // CHECK-NOT: "mini.linear"
 // CHECK-NOT: "mini.relu"
