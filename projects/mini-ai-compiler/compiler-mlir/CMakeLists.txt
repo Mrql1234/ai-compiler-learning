@@ -9,11 +9,16 @@ enable_testing()
 
 find_package(LLVM REQUIRED CONFIG)
 find_package(MLIR REQUIRED CONFIG)
-find_package(CUDAToolkit REQUIRED)
+find_package(CUDAToolkit QUIET)
 
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "LLVM CMake path: ${LLVM_CMAKE_DIR}")
 message(STATUS "MLIR CMake path: ${MLIR_CMAKE_DIR}")
+if(CUDAToolkit_FOUND)
+  message(STATUS "Found CUDA toolkit: ${CUDAToolkit_VERSION}")
+else()
+  message(WARNING "CUDA toolkit not found; building without MiniCudaRuntimeWrappers")
+endif()
 
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
 list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
@@ -32,7 +37,9 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 add_subdirectory(lib)
-add_subdirectory(runtime)
+if(CUDAToolkit_FOUND)
+  add_subdirectory(runtime)
+endif()
 add_subdirectory(tools)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/CMakeLists.txt")

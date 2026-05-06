@@ -26,6 +26,18 @@
 #include <string>
 #include <vector>
 
+#ifndef MINI_CUDA_RUNTIME_WRAPPERS_PATH
+#define MINI_CUDA_RUNTIME_WRAPPERS_PATH ""
+#endif
+
+#ifndef MINI_MLIR_RUNNER_UTILS_PATH
+#define MINI_MLIR_RUNNER_UTILS_PATH ""
+#endif
+
+#ifndef MINI_MLIR_C_RUNNER_UTILS_PATH
+#define MINI_MLIR_C_RUNNER_UTILS_PATH ""
+#endif
+
 using namespace mlir;
 
 namespace {

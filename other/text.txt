@@ -1,0 +1,121 @@
+本课程以通用NPU硬件架构与MLIR编译器工具链实践（开源工业级框架）为核心
+平台，沿着“理论认知→工具掌握→技能进阶→项目实战”的主线，通过手写MLIR优化Pass、
+模型转换全流程跟踪、INT8量化精度对比、YOLOv8Stream实践，以及Qwen大语言模型
+NPU部署等六个由浅入深的Lab实战，系统性地带你打通从AI编译器底层原理到在真实边
+缘硬件上完成工业级模型高效部署的全链路工程能力。
+序号 课程子阶段 课程内容说明 课程时长
+AI编译器基础
+1
+AI编译器中的
+C/C++
+SmallVectore/StringRef/ArraryRef,内
+存池技术BumpPtrAllocator,RTTI
+(isa/cast/dyn_cast),CRTP(静态多态)，
+Visitor,TableGen
+3
+2 AI编译器概论(Graph
+vsKernel)
+计算图表示,算子融合理论,AOTvs
+JIT编译2
+3 MLIR基础概念:
+Dialect/Op/Type
+MLIR语法、中间表达格式、常用的
+BuiltinDialect 3
+4 MLIRPass管理与模式
+匹配
+PassManager工作原理,
+GreedyPatternRewrite机制4
+5 Lab1:手写简单MLIR
+优化Pass
+基于MLIR框架编写一个冗余算子消
+除的Pass 3
+硬件与环境
+1 NPU硬件架构与存储
+层次
+NPU核心结构,计算单元与数据搬运
+(DMA)协同,局部存储空间管理4
+2 WSL2+Docker开发环
+境搭建
+配置WSL2,Docker映射,NPU工具
+链安装2
+3 Lab2:NPU基础推理
+Demo运行
+在NPU硬件平台上跑通ResNet50
+的CPU/NPU对比实验3
+MLIR实战剖析
+1编译器工具链架构
+与工作流概览
+模型转换(Transform)与部署
+(Deploy)工具链内幕3
+2
+Frontend:
+TopDialect功能及
+converter介绍
+TopDialect的定义及相关pass的功
+能。如何从onnx/torch/tflite转换到
+TopDialect
+4
+3 Backend: TpuDialect的设计4
+TpuDialect的设计、
+conversion/lowering介
+绍
+Tpu-mlir里的conversion：
+TopToTpu/TopToTosa简介
+Tpumlir中的pass介绍
+4 Tpu-mlir中的
+LayerGroup
+layergroup详解，基于layergroup进行
+算子调度/内存编排4
+5 Lab3:模型转换流程全
+跟踪
+完成从ONNX->MLIR->BModel的
+全手动转换过程3
+量化与性能优化
+1 INT8量化数学原理与
+误差分析
+对称与非对称量化、Per-channel量化
+原理3
+2校准算法
+(MinMax/KL/percentile)
+使用校准集寻找最佳阈值、自动寻找
+精度敏感层4
+3 Lab4:量化精度对比与
+精度回退
+分析量化损失，使用混合精度提升模
+型表现3
+4性能分析工具
+(Profiling)使用
+使用profiling工具定位算子耗时瓶
+颈与带宽利用率2
+模型部署实战(CV)
+1
+YOLOv8目标检测
+模型NPU部署
+在NPU硬件平台上部署yolov8网络，
+实现yolov8的预处理(letterbox)与后
+处理(N)
+4
+2 Lab5:YOLOv8
+Stream实践
+构建生产者-消费者模型，实现预处
+理、模型推理与后处理的并行化执行4
+LLM与Transformer
+1
+Attention算子部署和
+优化
+Transformer原理，MHA部署，
+Softmax/Matmul在NPU上的并
+行指令优化
+4
+2 KVCacheNPU管理机
+制
+解决LLM推理过程中的显存瓶颈与
+KV缓存复用4
+3 Qwen3模型量化与部
+署
+W8A8或W4A16量化方案在NPU
+平台上的实现6
+4 Lab6:部署一个NPU
+加速聊天机器人
+实现基于Qwen3的低延迟NPU推
+理应用4

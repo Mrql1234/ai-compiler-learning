@@ -10,6 +10,8 @@ add_executable(mini-compiler-gpu-runner
   mini-compiler-gpu-runner.cpp
 )
 
+list(GET LLVM_LIBRARY_DIRS 0 MINI_LLVM_LIB_DIR)
+
 target_include_directories(mini-compiler-opt
   PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -77,7 +79,18 @@ target_link_libraries(mini-compiler-gpu-runner
 
 target_compile_definitions(mini-compiler-gpu-runner
   PRIVATE
-  MINI_CUDA_RUNTIME_WRAPPERS_PATH="$<TARGET_FILE:MiniCudaRuntimeWrappers>"
-  MINI_MLIR_RUNNER_UTILS_PATH="/home/ql/toolchains/llvm_clang_static_analyzer/build/lib/libmlir_runner_utils.so"
-  MINI_MLIR_C_RUNNER_UTILS_PATH="/home/ql/toolchains/llvm_clang_static_analyzer/build/lib/libmlir_c_runner_utils.so"
+  MINI_MLIR_RUNNER_UTILS_PATH="${MINI_LLVM_LIB_DIR}/libmlir_runner_utils.so"
+  MINI_MLIR_C_RUNNER_UTILS_PATH="${MINI_LLVM_LIB_DIR}/libmlir_c_runner_utils.so"
 )
+
+if(TARGET MiniCudaRuntimeWrappers)
+  target_compile_definitions(mini-compiler-gpu-runner
+    PRIVATE
+    MINI_CUDA_RUNTIME_WRAPPERS_PATH="$<TARGET_FILE:MiniCudaRuntimeWrappers>"
+  )
+else()
+  target_compile_definitions(mini-compiler-gpu-runner
+    PRIVATE
+    MINI_CUDA_RUNTIME_WRAPPERS_PATH=""
+  )
+endif()
