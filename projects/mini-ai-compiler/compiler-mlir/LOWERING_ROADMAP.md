@@ -512,6 +512,284 @@ Triton 后端不适合一开始追求全覆盖。
 
 ---
 
+## 9.5 当前项目的 GPU 扩展实施方案
+
+结合当前 `compiler-mlir` 已有实现，GPU 路线后续不建议“同时开很多方向”，而建议按下面顺序推进：
+
+1. 融合相关 lowering
+2. GPU 映射策略
+3. host/device 边界与 memory space 处理
+4. 算子选择 / 后端路线选择
+
+原因是：
+
+- 当前项目已经有 `mini -> linalg` 基础
+- 已经有 `linear + relu -> fused_linear_relu` 的最小融合样例
+- 已经有 `mini-gpu-lowering` 主链路
+- 已经有 `mini-gpu-host-shared` 的 host/device 边界雏形
+
+也就是说，继续做 GPU 路线时，最稳的做法不是“另起一套新架构”，而是顺着现有 pass/pipeline 逐层增强。
+
+### 第一步：融合相关 lowering
+
+这是最适合最先扩展的方向。
+
+#### 目标
+
+- 扩大高层融合覆盖面
+- 为后续 GPU kernel 生成提供更稳定的高层语义单元
+- 让 GPU 路线的 kernel 边界更清晰
+
+#### 推荐先支持的模式
+
+- `mini.linear + mini.relu`
+  - 当前已支持，作为基线
+- `mini.matmul + mini.add`
+- `mini.matmul + mini.add + mini.relu`
+- `mini.linear + bias-add`
+- 后续再考虑：
+  - `mini.softmax` 局部模式
+  - `mini.layernorm` 局部模式
+
+#### 在当前项目中的落点
+
+- 继续扩展 `mini-canonicalize`
+- 继续扩展 `mini-fusion`
+- 必要时新增更明确的 pass，例如：
+  - `mini-gpu-fusion`
+
+#### 建议修改位置
+
+- `projects/mini-ai-compiler/compiler-mlir/lib/Passes.cpp`
+- `projects/mini-ai-compiler/compiler-mlir/include/MiniCompiler/Passes.h`
+
+#### 这一阶段的产物
+
+- 新的融合 pattern
+- 新的测试样例
+- GPU lowering 前后的 IR 对比
+
+#### 为什么先做这个
+
+因为它直接影响：
+
+- 一个 kernel 对应哪些计算
+- GPU route 后面看到的是“大一点的融合单元”还是“碎小 op”
+
+这一步越稳，后面的 tile / map / runtime 设计越不容易反复推翻。
+
+---
+
+### 第二步：GPU 映射策略
+
+这一步负责回答：
+
+- 怎么切 tile
+- 怎么映射 block / thread
+- 哪些 loop 归 block
+- 哪些 loop 归 thread
+
+#### 目标
+
+- 把当前“能 lower 到 `gpu.launch`”提升到“按可解释规则 lower 到 `gpu.launch`”
+- 让 GPU 路线具备明确的 schedule 层
+
+#### 推荐新增的 pass
+
+- `mini-gpu-tile`
+- `mini-gpu-map`
+
+#### 推荐第一版策略
+
+第一版不需要复杂 cost model，可以先做规则版：
+
+- 小 elementwise：
+  - 直接 map 到 thread-level 并行
+- `matmul` / `linear`：
+  - 固定 tile 大小
+  - 固定 block/thread 映射
+- `fused_linear_relu`：
+  - 先沿用 `linear` 的 tile 方案
+  - `relu` 作为 epilogue 留在同一 kernel 内
+
+#### 在当前项目中的落点
+
+当前 `mini-gpu-lowering` 已经包含：
+
+- `convert-linalg-to-parallel-loops`
+- `gpu-map-parallel-loops`
+- `convert-parallel-loop-to-gpu`
+- `gpu-kernel-outlining`
+
+下一步建议做法是：
+
+- 在这些官方 pass 之前插入自定义策略 pass
+- 先显式写出 tile / map 规则
+- 再让后续官方 pass 继续接管
+
+#### 建议修改位置
+
+- `projects/mini-ai-compiler/compiler-mlir/lib/Passes.cpp`
+- `projects/mini-ai-compiler/compiler-mlir/LOWERING_ROADMAP.md`
+- `projects/mini-ai-compiler/compiler-mlir/test/`
+
+#### 这一阶段的产物
+
+- 一个可解释的 `mini-gpu-tile` pass
+- 一个可解释的 `mini-gpu-map` pass
+- 至少一组固定 tile 参数的 demo
+- tile size 可通过 pipeline option 显式覆盖，例如 `tile-sizes=4,2`
+
+---
+
+### 第三步：host/device 边界与 memory space 处理
+
+这一步回答的是：
+
+- 哪些 buffer 留在 host
+- 哪些要转成 device 可见
+- 哪些适合 `host_shared`
+- kernel 参数怎么组织
+
+#### 当前基础
+
+项目里已经有：
+
+- `mini-gpu-host-shared`
+
+它已经在做：
+
+- 把 `gpu.launch_func` 使用到的 host memref 改写成 `gpu.alloc host_shared`
+- 为 GPU 可见 buffer 插入 `memref.copy`
+- 对只读源只做 copy-in，不做 copy-back
+- 对可写源保守地做 copy-in + copy-back
+
+#### 下一步建议
+
+把这部分从“能跑的样例逻辑”提升到“有策略的 memory pass”：
+
+- 明确输入 / 输出 / 中间值的分类
+- 明确哪些值只读，哪些值可写
+- 明确哪些 copy 是必须的，哪些可省
+- 后续为 shared memory / local memory / global memory 预留抽象
+
+#### 推荐新增方向
+
+- `mini-gpu-memory-plan`
+- 或扩展现有 `mini-gpu-host-shared`
+
+#### 推荐第一版能力
+
+- 输入 buffer 分类
+- 输出 buffer 分类
+- 常量 tensor 的 device 可见策略
+- 中间 memref 的最小复制策略
+- kernel 参数顺序的固定规则
+- 多次 launch 时按 launch 就近物化临时 shared buffer，避免跨 launch 复用陈旧副本
+
+#### 为什么这一步排在映射之后
+
+因为 tile / block / thread 方案确定后，才能更自然地讨论：
+
+- 哪些数据要提前搬运
+- 哪些数据值得放到更快的 memory space
+
+#### 建议修改位置
+
+- `projects/mini-ai-compiler/compiler-mlir/lib/Passes.cpp`
+- `projects/mini-ai-compiler/compiler-mlir/tools/mini-compiler-gpu-runner.cpp`
+- `projects/mini-ai-compiler/compiler-mlir/runtime/`
+
+#### 这一阶段的产物
+
+- 更清晰的 host/device buffer 规则
+- 更稳定的 GPU runner 输入约定
+- 更容易扩展到云端执行的 runtime 契约
+
+---
+
+### 第四步：算子选择 / 后端路线选择
+
+这是 GPU 路线和 Triton / library backend 的分叉层。
+
+它回答的是：
+
+- 哪些 op 走通用 MLIR GPU 路线
+- 哪些 op 走 Triton
+- 哪些 op 未来应走 cuBLAS / CUTLASS 或其他 vendor library
+
+#### 原则
+
+第一版不要做复杂 cost model，先做规则选择即可。
+
+#### 推荐第一版规则
+
+- 通用 MLIR GPU：
+  - `relu`
+  - `add`
+  - `mul`
+- Triton 候选：
+  - `fused_linear_relu`
+  - 热点 elementwise fusion
+- library 候选：
+  - 大尺寸 `matmul`
+  - 大尺寸 `linear`
+
+#### 推荐实现方式
+
+先做“标记与分流”，不要求一开始就完成真实后端接入：
+
+- 给 op 打 attribute
+- 或者新增一个中间 pass：
+  - `mini-backend-select`
+  - `mini-triton-prepare`
+
+#### 为什么把它放最后
+
+因为只有当前面三步比较稳定时，路线选择才不会频繁失效：
+
+- 融合单元要先稳定
+- tile/map 要先大致稳定
+- memory / launch 约定要先稳定
+
+否则“应该走哪条路线”的判断标准会不断变化。
+
+#### 建议修改位置
+
+- `projects/mini-ai-compiler/compiler-mlir/lib/Passes.cpp`
+- `projects/mini-ai-compiler/compiler-mlir/include/MiniCompiler/Passes.h`
+- 后续可能新增：
+  - `projects/mini-ai-compiler/compiler-mlir/lib/Strategy.cpp`
+  - `projects/mini-ai-compiler/compiler-mlir/include/MiniCompiler/Strategy.h`
+
+#### 这一阶段的产物
+
+- 一版规则式 strategy selection
+- 通用 GPU / Triton / library 三类候选分流
+- 为后续真实 Triton / cuBLAS / CUTLASS 接入预留稳定入口
+
+---
+
+### 小结：为什么按这个顺序
+
+建议顺序是：
+
+1. 融合
+2. 映射
+3. 边界与 memory
+4. 路线选择
+
+因为它们的依赖关系基本就是：
+
+- 先知道“一个 kernel 单元是什么”
+- 再知道“这个 kernel 怎么映射到 GPU”
+- 再知道“它的数据怎么进出 GPU、怎么摆放”
+- 最后才决定“这个单元是否根本不该走这条 GPU 路，而应转去 Triton 或库调用”
+
+这是当前 `compiler-mlir` 最适合的推进方式。
+
+---
+
 ## 10. 当前项目的最终建议
 
 对 `compiler-mlir`，建议明确以下定位：

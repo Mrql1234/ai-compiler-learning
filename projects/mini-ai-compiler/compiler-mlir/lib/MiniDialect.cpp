@@ -9,7 +9,8 @@ namespace mini {
 
 MiniDialect::MiniDialect(MLIRContext *context)
     : Dialect(getDialectNamespace(), context, TypeID::get<MiniDialect>()) {
-  addOperations<ConstantOp, LinearOp, ReluOp, FusedLinearReluOp>();
+  addOperations<ConstantOp, LinearOp, MatmulOp, AddOp, ReluOp,
+                FusedLinearReluOp, FusedMatmulAddReluOp>();
 }
 
 ArrayRef<StringRef> ConstantOp::getAttributeNames() {
@@ -45,6 +46,26 @@ void LinearOp::build(OpBuilder &builder, OperationState &state, Type resultType,
   state.addTypes(resultType);
 }
 
+ArrayRef<StringRef> MatmulOp::getAttributeNames() {
+  return ArrayRef<StringRef>();
+}
+
+void MatmulOp::build(OpBuilder &builder, OperationState &state, Type resultType,
+                     Value lhs, Value rhs) {
+  (void)builder;
+  state.addOperands({lhs, rhs});
+  state.addTypes(resultType);
+}
+
+ArrayRef<StringRef> AddOp::getAttributeNames() { return ArrayRef<StringRef>(); }
+
+void AddOp::build(OpBuilder &builder, OperationState &state, Type resultType,
+                  Value lhs, Value rhs) {
+  (void)builder;
+  state.addOperands({lhs, rhs});
+  state.addTypes(resultType);
+}
+
 ArrayRef<StringRef> ReluOp::getAttributeNames() { return ArrayRef<StringRef>(); }
 
 void ReluOp::build(OpBuilder &builder, OperationState &state, Type resultType,
@@ -61,6 +82,18 @@ void FusedLinearReluOp::build(OpBuilder &builder, OperationState &state,
                               Value bias) {
   (void)builder;
   state.addOperands({input, weight, bias});
+  state.addTypes(resultType);
+}
+
+ArrayRef<StringRef> FusedMatmulAddReluOp::getAttributeNames() {
+  return ArrayRef<StringRef>();
+}
+
+void FusedMatmulAddReluOp::build(OpBuilder &builder, OperationState &state,
+                                 Type resultType, Value lhs, Value rhs,
+                                 Value bias) {
+  (void)builder;
+  state.addOperands({lhs, rhs, bias});
   state.addTypes(resultType);
 }
 

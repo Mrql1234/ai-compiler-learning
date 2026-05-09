@@ -4,11 +4,9 @@
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Passes.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -16,6 +14,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassOptions.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Transforms/Passes.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
@@ -27,6 +26,14 @@ using namespace mlir;
 
 namespace mini {
 namespace {
+
+struct MiniGpuLoweringPipelineOptions
+    : public PassPipelineOptions<MiniGpuLoweringPipelineOptions> {
+  PassOptions::Option<std::string> tileSizes{
+      *this, "tile-sizes",
+      llvm::cl::desc("Comma-separated tile sizes for the custom mini-gpu-tile stage"),
+      llvm::cl::init("")};
+};
 
 static FailureOr<RankedTensorType> getRankedTensorType(Value value) {
   auto tensorType = dyn_cast<RankedTensorType>(value.getType());
@@ -131,6 +138,124 @@ static FailureOr<Value> lowerLinearValue(Location loc, Value input, Value weight
   return addBias->getResult(0);
 }
 
+static FailureOr<Value> lowerMatmulValue(Location loc, Value lhs, Value rhs,
+                                         RankedTensorType resultType,
+                                         PatternRewriter &rewriter) {
+  auto lhsType = getRankedTensorType(lhs);
+  auto rhsType = getRankedTensorType(rhs);
+  if (failed(lhsType) || failed(rhsType))
+    return failure();
+  if (lhsType->getRank() != 2 || rhsType->getRank() != 2 ||
+      resultType.getRank() != 2)
+    return failure();
+  if (!lhsType->getElementType().isF32() || !rhsType->getElementType().isF32() ||
+      !resultType.getElementType().isF32())
+    return failure();
+
+  auto zeroTensor = createEmptyTensorFor(loc, resultType, lhs, rewriter);
+  if (failed(zeroTensor))
+    return failure();
+
+  auto zero = rewriter.create<arith::ConstantOp>(
+      loc, rewriter.getFloatAttr(resultType.getElementType(), 0.0));
+  auto fill = rewriter.create<linalg::FillOp>(
+      loc, TypeRange{resultType}, ValueRange{zero}, ValueRange{*zeroTensor});
+
+  auto matmul = rewriter.create<linalg::MatmulOp>(
+      loc, TypeRange{resultType}, ValueRange{lhs, rhs},
+      ValueRange{fill->getResult(0)});
+  return matmul->getResult(0);
+}
+
+static bool isBiasBroadcastAdd(RankedTensorType matrixType,
+                               RankedTensorType biasType,
+                               RankedTensorType resultType) {
+  if (!matrixType || !biasType || !resultType)
+    return false;
+  if (matrixType.getRank() != 2 || biasType.getRank() != 1 ||
+      resultType.getRank() != 2)
+    return false;
+  if (matrixType != resultType)
+    return false;
+  if (matrixType.getElementType() != biasType.getElementType())
+    return false;
+  int64_t resultColumns = resultType.getShape()[1];
+  int64_t biasColumns = biasType.getShape()[0];
+  return ShapedType::isDynamic(resultColumns) ||
+         ShapedType::isDynamic(biasColumns) || resultColumns == biasColumns;
+}
+
+static FailureOr<Value> lowerAddValue(Location loc, Value lhs, Value rhs,
+                                      RankedTensorType resultType,
+                                      PatternRewriter &rewriter) {
+  auto lhsType = getRankedTensorType(lhs);
+  auto rhsType = getRankedTensorType(rhs);
+  if (failed(lhsType) || failed(rhsType))
+    return failure();
+  if (!lhsType->getElementType().isF32() || !rhsType->getElementType().isF32() ||
+      !resultType.getElementType().isF32())
+    return failure();
+
+  auto outputInit = createEmptyTensorFor(loc, resultType, lhs, rewriter);
+  if (failed(outputInit))
+    return failure();
+
+  auto identityMap =
+      AffineMap::getMultiDimIdentityMap(resultType.getRank(), rewriter.getContext());
+  SmallVector<utils::IteratorType> iteratorTypes(resultType.getRank(),
+                                                 utils::IteratorType::parallel);
+
+  if (*lhsType == resultType && *rhsType == resultType) {
+    SmallVector<AffineMap> indexingMaps{identityMap, identityMap, identityMap};
+    auto addOp = rewriter.create<linalg::GenericOp>(
+        loc, TypeRange{resultType}, ValueRange{lhs, rhs}, ValueRange{*outputInit},
+        indexingMaps, iteratorTypes,
+        [&](OpBuilder &builder, Location nestedLoc, ValueRange args) {
+          auto sum = builder.create<arith::AddFOp>(nestedLoc, args[0], args[1]);
+          builder.create<linalg::YieldOp>(nestedLoc, sum.getResult());
+        });
+    return addOp->getResult(0);
+  }
+
+  Value matrixValue;
+  Value biasValue;
+  RankedTensorType matrixType;
+  RankedTensorType biasType;
+  if (isBiasBroadcastAdd(*lhsType, *rhsType, resultType)) {
+    matrixValue = lhs;
+    biasValue = rhs;
+    matrixType = *lhsType;
+    biasType = *rhsType;
+  } else if (isBiasBroadcastAdd(*rhsType, *lhsType, resultType)) {
+    matrixValue = rhs;
+    biasValue = lhs;
+    matrixType = *rhsType;
+    biasType = *lhsType;
+  } else {
+    return failure();
+  }
+
+  auto d0 = rewriter.getAffineDimExpr(0);
+  auto d1 = rewriter.getAffineDimExpr(1);
+  SmallVector<AffineMap> indexingMaps{
+      AffineMap::get(2, 0, {d0, d1}, rewriter.getContext()),
+      AffineMap::get(2, 0, {d1}, rewriter.getContext()),
+      AffineMap::get(2, 0, {d0, d1}, rewriter.getContext())};
+  SmallVector<utils::IteratorType> broadcastIteratorTypes{
+      utils::IteratorType::parallel, utils::IteratorType::parallel};
+
+  (void)matrixType;
+  (void)biasType;
+  auto addOp = rewriter.create<linalg::GenericOp>(
+      loc, TypeRange{resultType}, ValueRange{matrixValue, biasValue},
+      ValueRange{*outputInit}, indexingMaps, broadcastIteratorTypes,
+      [&](OpBuilder &builder, Location nestedLoc, ValueRange args) {
+        auto sum = builder.create<arith::AddFOp>(nestedLoc, args[0], args[1]);
+        builder.create<linalg::YieldOp>(nestedLoc, sum.getResult());
+      });
+  return addOp->getResult(0);
+}
+
 struct FoldReluConstantPattern : public OpRewritePattern<ReluOp> {
   using OpRewritePattern<ReluOp>::OpRewritePattern;
 
@@ -178,6 +303,54 @@ struct FuseLinearReluPattern : public OpRewritePattern<ReluOp> {
   }
 };
 
+struct FuseMatmulAddReluPattern : public OpRewritePattern<ReluOp> {
+  using OpRewritePattern<ReluOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ReluOp op,
+                                PatternRewriter &rewriter) const override {
+    auto add = op.getInput().getDefiningOp<AddOp>();
+    if (!add || !add->hasOneUse())
+      return failure();
+
+    auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
+    if (!resultType)
+      return failure();
+
+    MatmulOp matmul;
+    Value bias;
+    auto lhsType = dyn_cast<RankedTensorType>(add.getLhs().getType());
+    auto rhsType = dyn_cast<RankedTensorType>(add.getRhs().getType());
+    if (auto candidate = add.getLhs().getDefiningOp<MatmulOp>()) {
+      if (lhsType && rhsType && isBiasBroadcastAdd(
+                                dyn_cast<RankedTensorType>(candidate.getOutput().getType()),
+                                rhsType, resultType)) {
+        matmul = candidate;
+        bias = add.getRhs();
+      }
+    }
+    if (!matmul) {
+      if (auto candidate = add.getRhs().getDefiningOp<MatmulOp>()) {
+        if (lhsType && rhsType && isBiasBroadcastAdd(
+                                  dyn_cast<RankedTensorType>(candidate.getOutput().getType()),
+                                  lhsType, resultType)) {
+          matmul = candidate;
+          bias = add.getLhs();
+        }
+      }
+    }
+    if (!matmul || !matmul->hasOneUse())
+      return failure();
+
+    auto fused = rewriter.create<FusedMatmulAddReluOp>(
+        op.getLoc(), op.getOutput().getType(), matmul.getLhs(), matmul.getRhs(),
+        bias);
+    rewriter.replaceOp(op, fused.getOutput());
+    rewriter.eraseOp(add);
+    rewriter.eraseOp(matmul);
+    return success();
+  }
+};
+
 struct LowerConstantPattern : public OpRewritePattern<ConstantOp> {
   using OpRewritePattern<ConstantOp>::OpRewritePattern;
 
@@ -189,6 +362,40 @@ struct LowerConstantPattern : public OpRewritePattern<ConstantOp> {
     auto lowered = rewriter.create<arith::ConstantOp>(op.getLoc(),
                                                       valueAttr);
     rewriter.replaceOp(op, lowered.getResult());
+    return success();
+  }
+};
+
+struct LowerMatmulPattern : public OpRewritePattern<MatmulOp> {
+  using OpRewritePattern<MatmulOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(MatmulOp op,
+                                PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
+    if (!resultType)
+      return failure();
+    auto lowered =
+        lowerMatmulValue(op.getLoc(), op.getLhs(), op.getRhs(), resultType, rewriter);
+    if (failed(lowered))
+      return failure();
+    rewriter.replaceOp(op, *lowered);
+    return success();
+  }
+};
+
+struct LowerAddPattern : public OpRewritePattern<AddOp> {
+  using OpRewritePattern<AddOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AddOp op,
+                                PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
+    if (!resultType)
+      return failure();
+    auto lowered =
+        lowerAddValue(op.getLoc(), op.getLhs(), op.getRhs(), resultType, rewriter);
+    if (failed(lowered))
+      return failure();
+    rewriter.replaceOp(op, *lowered);
     return success();
   }
 };
@@ -246,6 +453,31 @@ struct LowerFusedLinearReluPattern : public OpRewritePattern<FusedLinearReluOp> 
   }
 };
 
+struct LowerFusedMatmulAddReluPattern
+    : public OpRewritePattern<FusedMatmulAddReluOp> {
+  using OpRewritePattern<FusedMatmulAddReluOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(FusedMatmulAddReluOp op,
+                                PatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
+    if (!resultType)
+      return failure();
+    auto matmul = lowerMatmulValue(op.getLoc(), op.getLhs(), op.getRhs(),
+                                   resultType, rewriter);
+    if (failed(matmul))
+      return failure();
+    auto add =
+        lowerAddValue(op.getLoc(), *matmul, op.getBias(), resultType, rewriter);
+    if (failed(add))
+      return failure();
+    auto relu = lowerReluValue(op.getLoc(), *add, resultType, rewriter);
+    if (failed(relu))
+      return failure();
+    rewriter.replaceOp(op, *relu);
+    return success();
+  }
+};
+
 struct MiniCanonicalizePass
     : public PassWrapper<MiniCanonicalizePass, OperationPass<func::FuncOp>> {
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -254,7 +486,8 @@ struct MiniCanonicalizePass
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<FoldReluConstantPattern, FuseLinearReluPattern>(&getContext());
+    patterns.add<FoldReluConstantPattern, FuseLinearReluPattern,
+                 FuseMatmulAddReluPattern>(&getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
@@ -298,13 +531,13 @@ struct MiniFusionPass
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<FuseLinearReluPattern>(&getContext());
+    patterns.add<FuseLinearReluPattern, FuseMatmulAddReluPattern>(&getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
   }
   StringRef getArgument() const final { return "mini-fusion"; }
   StringRef getDescription() const final {
-    return "Fuse mini.linear followed by mini.relu";
+    return "Fuse supported mini linear/matmul bias epilogues";
   }
 };
 
@@ -317,14 +550,16 @@ struct MiniLowerToLinalgPass
 
   void runOnOperation() override {
     RewritePatternSet patterns(&getContext());
-    patterns.add<LowerConstantPattern, LowerReluPattern, LowerLinearPattern,
-                 LowerFusedLinearReluPattern>(&getContext());
+    patterns.add<LowerConstantPattern, LowerMatmulPattern, LowerAddPattern,
+                 LowerReluPattern, LowerLinearPattern, LowerFusedLinearReluPattern,
+                 LowerFusedMatmulAddReluPattern>(&getContext());
     if (failed(applyPatternsGreedily(getOperation(), std::move(patterns))))
       signalPassFailure();
 
     bool hasIllegalMiniOps = false;
     getOperation()->walk([&](Operation *operation) {
-      if (isa<ConstantOp, LinearOp, ReluOp, FusedLinearReluOp>(operation))
+      if (isa<ConstantOp, LinearOp, MatmulOp, AddOp, ReluOp, FusedLinearReluOp,
+              FusedMatmulAddReluOp>(operation))
         hasIllegalMiniOps = true;
     });
     if (hasIllegalMiniOps) {
@@ -336,94 +571,6 @@ struct MiniLowerToLinalgPass
   StringRef getArgument() const final { return "mini-lower-to-linalg"; }
   StringRef getDescription() const final {
     return "Lower mini dialect ops to linalg/arith/tensor";
-  }
-};
-
-static SmallVector<Value> collectDynamicMemRefDims(Location loc, Value source,
-                                                   MemRefType type,
-                                                   OpBuilder &builder) {
-  SmallVector<Value> dynamicDims;
-  for (auto [index, dim] : llvm::enumerate(type.getShape())) {
-    if (ShapedType::isDynamic(dim))
-      dynamicDims.push_back(builder.create<memref::DimOp>(loc, source, index));
-  }
-  return dynamicDims;
-}
-
-struct MiniGpuHostSharedPass
-    : public PassWrapper<MiniGpuHostSharedPass, OperationPass<func::FuncOp>> {
-  StringRef getArgument() const final { return "mini-gpu-host-shared"; }
-  StringRef getDescription() const final {
-    return "Rewrite host-side memrefs used by gpu.launch_func into "
-           "gpu.alloc host_shared buffers";
-  }
-
-  Value materializeGpuVisibleCopy(Value source, gpu::LaunchFuncOp launch,
-                                  DenseMap<Value, Value> &cache) {
-    auto memrefType = dyn_cast<MemRefType>(source.getType());
-    if (!memrefType)
-      return {};
-    if (auto it = cache.find(source); it != cache.end())
-      return it->second;
-
-    OpBuilder builder(launch);
-    auto dynamicDims =
-        collectDynamicMemRefDims(launch.getLoc(), source, memrefType, builder);
-    auto sharedAlloc = builder.create<gpu::AllocOp>(
-        launch.getLoc(), memrefType,
-        /*asyncDependencies=*/ValueRange{},
-        /*dynamicSizes=*/dynamicDims,
-        /*symbolOperands=*/ValueRange{}, builder.getUnitAttr());
-    builder.create<memref::CopyOp>(launch.getLoc(), source,
-                                   sharedAlloc.getMemref());
-    cache[source] = sharedAlloc.getMemref();
-    return sharedAlloc.getMemref();
-  }
-
-  void runOnOperation() override {
-    func::FuncOp func = getOperation();
-    if (func.isExternal())
-      return;
-
-    SmallVector<memref::AllocOp> allocs;
-    func.walk([&](memref::AllocOp alloc) { allocs.push_back(alloc); });
-    for (memref::AllocOp alloc : allocs) {
-      bool needsGpuShared = llvm::any_of(alloc.getResult().getUsers(), [](Operation *user) {
-        return isa<gpu::LaunchFuncOp>(user);
-      });
-      if (!needsGpuShared)
-        continue;
-
-      OpBuilder builder(alloc);
-      auto sharedAlloc = builder.create<gpu::AllocOp>(
-          alloc.getLoc(), alloc.getType(),
-          /*asyncDependencies=*/ValueRange{},
-          /*dynamicSizes=*/alloc.getDynamicSizes(),
-          /*symbolOperands=*/alloc.getSymbolOperands(), builder.getUnitAttr());
-      alloc.getResult().replaceAllUsesWith(sharedAlloc.getMemref());
-      alloc.erase();
-    }
-
-    DenseMap<Value, Value> copiedGpuOperands;
-    SmallVector<gpu::LaunchFuncOp> launches;
-    func.walk([&](gpu::LaunchFuncOp launch) { launches.push_back(launch); });
-    for (gpu::LaunchFuncOp launch : launches) {
-      for (OpOperand &operand : launch->getOpOperands()) {
-        auto memrefType = dyn_cast<MemRefType>(operand.get().getType());
-        if (!memrefType)
-          continue;
-        if (operand.get().getDefiningOp<gpu::AllocOp>())
-          continue;
-        Value sharedValue =
-            materializeGpuVisibleCopy(operand.get(), launch, copiedGpuOperands);
-        if (!sharedValue) {
-          launch.emitError("failed to materialize host_shared GPU operand");
-          signalPassFailure();
-          return;
-        }
-        operand.set(sharedValue);
-      }
-    }
   }
 };
 
@@ -454,11 +601,13 @@ void registerMiniPasses() {
   PassRegistration<MiniConstantFoldPass>();
   PassRegistration<MiniDCEPass>();
   PassRegistration<MiniFusionPass>();
-  PassRegistration<MiniGpuHostSharedPass>();
   PassRegistration<MiniLowerToLinalgPass>();
+  registerMiniGpuPasses();
 }
 
 void registerMiniPassPipelines() {
+  registerMiniGpuPassPipelines();
+
   PassPipelineRegistration<>(
       "mini-cpu-lowering",
       "Run the project CPU lowering pipeline from mini dialect to LLVM dialect",
@@ -495,11 +644,11 @@ void registerMiniPassPipelines() {
           llvm::report_fatal_error("failed to parse mini-gpu-prep pipeline");
       });
 
-  PassPipelineRegistration<>(
+  PassPipelineRegistration<MiniGpuLoweringPipelineOptions>(
       "mini-gpu-lowering",
       "Lower mini dialect programs into a GPU-oriented IR path that reaches "
       "gpu.launch/gpu.module without requiring a local GPU",
-      [](OpPassManager &pm) {
+      [](OpPassManager &pm, const MiniGpuLoweringPipelineOptions &options) {
         if (failed(parsePassPipeline(
                 "func.func(mini-canonicalize,mini-fusion,mini-lower-to-linalg),"
                 "canonicalize,cse,"
@@ -513,10 +662,31 @@ void registerMiniPassPipelines() {
           llvm::report_fatal_error("failed to parse shared GPU prep pipeline");
 
         pm.addNestedPass<func::FuncOp>(createConvertLinalgToParallelLoopsPass());
-        pm.addNestedPass<func::FuncOp>(createGpuMapParallelLoopsPass());
+        if (options.tileSizes.empty()) {
+          pm.addNestedPass<func::FuncOp>(createMiniGpuTilePass());
+        } else {
+          SmallVector<int64_t> tileSizes;
+          SmallVector<StringRef> pieces;
+          StringRef(options.tileSizes).split(pieces, ',',
+                                             /*MaxSplit=*/-1,
+                                             /*KeepEmpty=*/false);
+          if (pieces.empty())
+            llvm::report_fatal_error("mini-gpu-lowering expects tile-sizes to "
+                                     "contain at least one positive integer");
+          for (StringRef piece : pieces) {
+            int64_t tileSize = 0;
+            if (piece.trim().getAsInteger(10, tileSize) || tileSize <= 0)
+              llvm::report_fatal_error(
+                  "mini-gpu-lowering expects tile-sizes to be a "
+                  "comma-separated list of positive integers");
+            tileSizes.push_back(tileSize);
+          }
+          pm.addNestedPass<func::FuncOp>(createMiniGpuTilePass(tileSizes));
+        }
+        pm.addNestedPass<func::FuncOp>(createMiniGpuMapPass());
         pm.addNestedPass<func::FuncOp>(createConvertParallelLoopToGpuPass());
         pm.addPass(createGpuKernelOutliningPass());
-        pm.addNestedPass<func::FuncOp>(std::make_unique<MiniGpuHostSharedPass>());
+        pm.addNestedPass<func::FuncOp>(createMiniGpuHostSharedPass());
         pm.addPass(createCanonicalizerPass());
         pm.addPass(createCSEPass());
       });

@@ -19,7 +19,7 @@ It can now:
 
 - compile against an existing LLVM/MLIR build
 - link against the local CUDA driver toolchain for GPU execution
-- parse and verify `mini.constant`, `mini.linear`, `mini.relu`, `mini.fused_linear_relu`
+- parse and verify `mini.constant`, `mini.linear`, `mini.matmul`, `mini.add`, `mini.relu`, `mini.fused_linear_relu`, `mini.fused_matmul_add_relu`
 - run mini canonicalization / fusion / constant-fold passes
 - lower `mini.*` ops to `linalg` / `arith` / `tensor`
 - continue into an experimental bufferized CPU-oriented path with standard MLIR passes
@@ -89,6 +89,45 @@ Lower further into GPU launch/module form without needing a local GPU:
 ./build/bin/mini-compiler-opt --mini-gpu-lowering test/gpu_prep.mlir
 ```
 
+Inspect the project-defined GPU loop mapping strategy on `scf.parallel`:
+
+```bash
+./build/bin/mini-compiler-opt test/gpu_map.mlir --mini-gpu-map
+```
+
+Inspect the current default tiling + mapping strategy:
+
+```bash
+./build/bin/mini-compiler-opt test/gpu_tile_map.mlir --mini-gpu-tile --mini-gpu-map
+```
+
+Current default tile sizes are `8 x 8` for the leading 2 GPU dimensions.
+
+Override tile sizes explicitly for the standalone tiling stage:
+
+```bash
+./build/bin/mini-compiler-opt test/gpu_tile_options.mlir --mini-gpu-tile-pipeline="tile-sizes=4,2"
+```
+
+Or override the tile sizes inside the full GPU lowering pipeline:
+
+```bash
+./build/bin/mini-compiler-opt test/gpu_prep.mlir --mini-gpu-lowering="tile-sizes=16,8"
+```
+
+The current memory pass now does two things for non-`gpu.alloc` launch operands:
+
+- materialize a `gpu.alloc host_shared` buffer before `gpu.launch_func`
+- skip copy-back for read-only sources such as constant `memref.global`
+- conservatively insert a copy-back after the launch for mutable operands
+
+You can inspect that behavior with:
+
+```bash
+./build/bin/mini-compiler-opt test/gpu_host_shared_copyback.mlir --mini-gpu-host-shared
+./build/bin/mini-compiler-opt test/gpu_host_shared_readonly.mlir --mini-gpu-host-shared
+```
+
 Run the local GPU JIT demo through the new compiler-mlir GPU runner:
 
 ```bash
@@ -111,6 +150,40 @@ Run the staged A10 NVVM lowering pipeline:
 
 ```bash
 ./scripts/a10_lower_to_nvvm.sh test/gpu_prep.mlir
+```
+
+Run a minimal correctness + performance comparison between the CPU and GPU
+runner paths:
+
+```bash
+python3 ./scripts/benchmark_compare.py test/gpu_runner_demo.mlir \
+  --warmup 1 \
+  --repeat 5
+```
+
+This harness:
+
+- runs the CPU runner and GPU runner on the same MLIR module
+- checks the final numeric result with configurable tolerances
+- reports average / median / min / max latency
+- prints a simple CPU-vs-GPU speedup summary
+
+Useful options:
+
+```bash
+python3 ./scripts/benchmark_compare.py test/gpu_runner_demo.mlir \
+  --entry-function=run \
+  --result-type=f32 \
+  --warmup 2 \
+  --repeat 10 \
+  --gpu-extra-arg=--gpu-chip=sm_86 \
+  --gpu-extra-arg=--cubin-format=fatbin
+```
+
+If you only want a CPU baseline on a machine without a working NVPTX/CUDA path:
+
+```bash
+python3 ./scripts/benchmark_compare.py test/gpu_runner_demo.mlir --skip-gpu
 ```
 
 Translate the LLVM dialect output into textual LLVM IR:
