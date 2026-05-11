@@ -1,0 +1,6 @@
+build/
+*.qdrep
+*.nsys-rep
+*.sqlite
+*.ncu-rep
+

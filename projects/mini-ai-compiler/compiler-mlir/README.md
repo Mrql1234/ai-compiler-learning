@@ -245,6 +245,8 @@ GPU 性能监控入口文件：
 - `scripts/perf_profile_ncu.sh`：Nsight Compute 包装脚本
 - `tools/mini-compiler-kernel-bench.cpp`：手写 CUDA / cuBLAS benchmark 入口
 
+性能监控方案的目标口径是对比三条路线最终 kernel 的 `kernel_ms`，不把 lowering、JIT engine 创建、输入构造、显存分配、H2D/D2H 拷贝计入主指标。当前已归档 A10 数据仍是 v0 工程快照：`mlir_nvvm` 走编译器 runner，`cuda_hand` / `cublas` 走外部 benchmark；后续会演进为三条路线都由编译器 backend selection 分叉并调用统一 runtime ABI。
+
 本地 CPU-only smoke check 可用 dummy external backend 验证 harness 本身：
 
 ```bash

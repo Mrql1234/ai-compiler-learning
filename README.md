@@ -47,6 +47,7 @@
 - [ ] 项目 2：Triton 算子库（LayerNorm、GELU、Attention）
 - [ ] 项目 3：简易 LLM 推理引擎（KV Cache + Continuous Batching）
 - [ ] 项目 4：MLIR Pass 开发（贡献到开源项目）
+- [x] 项目 5：手写 CUDA 算子实验室（基础算子 + Nsight 性能分析）
 
 ---
 
