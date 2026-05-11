@@ -65,6 +65,13 @@ cmake -S . -B build -G Ninja
 cmake --build build -j
 ```
 
+默认构建脚本会通过 `nvidia-smi` 探测本机 GPU compute capability，并传给 CMake。也可以手动覆盖：
+
+```bash
+cd projects/cuda-kernel-lab
+CUDA_ARCHITECTURES=86 bash scripts/build.sh
+```
+
 如果 CMake 提示找不到 `nvcc`，通常说明当前环境没有正确暴露 CUDA Toolkit，可以显式指定：
 
 ```bash

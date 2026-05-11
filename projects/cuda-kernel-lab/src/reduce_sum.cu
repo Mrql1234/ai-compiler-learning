@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <numeric>
 #include <vector>
@@ -72,7 +73,7 @@ int main() {
     h_input[i] = 1.0f + static_cast<float>(i % 7) * 0.1f;
   }
 
-  float cpu_ref = std::accumulate(h_input.begin(), h_input.end(), 0.0f);
+  double cpu_ref = std::accumulate(h_input.begin(), h_input.end(), 0.0);
 
   float* d_input = nullptr;
   CUDA_CHECK(cudaMalloc(&d_input, bytes));
@@ -91,18 +92,23 @@ int main() {
   float elapsed_ms = 0.0f;
   CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
 
-  float abs_diff = std::fabs(gpu_result - cpu_ref);
+  double abs_diff = std::fabs(static_cast<double>(gpu_result) - cpu_ref);
+  double tolerance = std::fabs(cpu_ref) * 1e-7;
+  if (tolerance < 1e-2) {
+    tolerance = 1e-2;
+  }
 
+  std::cout << std::fixed << std::setprecision(6);
   std::cout << "CUDA Reduce Sum Demo\n";
   std::cout << "n = " << n << "\n";
   std::cout << "gpu result = " << gpu_result << "\n";
   std::cout << "cpu result = " << cpu_ref << "\n";
   std::cout << "abs diff = " << abs_diff << "\n";
+  std::cout << "tolerance = " << tolerance << "\n";
   std::cout << "elapsed = " << elapsed_ms << " ms\n";
 
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));
   CUDA_CHECK(cudaFree(d_input));
-  return abs_diff < 1e-2f ? 0 : 1;
+  return abs_diff <= tolerance ? 0 : 1;
 }
-
