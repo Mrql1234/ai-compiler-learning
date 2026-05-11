@@ -233,8 +233,19 @@ If you only want a CPU baseline on a machine without a working NVPTX/CUDA path:
 python3 ./scripts/benchmark_compare.py test/gpu_runner_demo.mlir --skip-gpu
 ```
 
-Run a local CPU-only smoke check of the performance harness using a dummy
-external backend:
+GPU 性能监控入口文件：
+
+- `PERF_MONITORING_PLAN.md`：完整 GPU 性能监控方案、入口文件和命令说明
+- `perf/README.md`：`perf/` 目录的快速入口说明
+- `perf/cases/gpu_runner_demo.json`：小型 demo case，包含 `mlir_nvvm`、`cuda_hand`、`cublas`
+- `perf/cases/linear_relu_f32_m1024_n1024_k1024.json`：大型 `linear + relu` case
+- `scripts/perf_run.py`：统一运行入口，生成 backend JSON 和 `summary.json`
+- `scripts/perf_compare.py`：对比 `summary.json`
+- `scripts/perf_profile_nsys.sh`：Nsight Systems 包装脚本
+- `scripts/perf_profile_ncu.sh`：Nsight Compute 包装脚本
+- `tools/mini-compiler-kernel-bench.cpp`：手写 CUDA / cuBLAS benchmark 入口
+
+本地 CPU-only smoke check 可用 dummy external backend 验证 harness 本身：
 
 ```bash
 python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
@@ -246,70 +257,63 @@ python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
 python3 ./scripts/perf_compare.py /tmp/compiler-mlir-perf-smoke/summary.json
 ```
 
-Run the GPU performance harness for the first compiler-generated baseline on a
-CUDA-enabled cloud GPU machine:
-
-```bash
-python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
-  --warmup 10 \
-  --repeat 100
-```
-
-The performance harness entry files are:
-
-- `perf/cases/gpu_runner_demo.json`: shared case definition
-- `PERF_MONITORING_PLAN.md`: cloud GPU implementation and optimization plan
-- `scripts/perf_run.py`: runs selected backends and writes JSON results
-- `scripts/perf_compare.py`: compares an existing `summary.json`
-- `scripts/perf_profile_nsys.sh`: wraps any backend command with Nsight Systems
-- `scripts/perf_profile_ncu.sh`: wraps any backend command with Nsight Compute
-
-Compare a saved run:
-
-```bash
-python3 ./scripts/perf_compare.py perf/runs/<run-dir>/summary.json
-```
-
-Run the same case with an external hand CUDA backend command:
+在 A10 云 GPU 上运行小型 demo 的三 backend 对比：
 
 ```bash
 python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
   --backend mlir_nvvm \
   --backend cuda_hand \
-  --backend-command cuda_hand='./build/bin/mini-compiler-kernel-bench --backend cuda_hand --case perf/cases/gpu_runner_demo.json' \
+  --backend cublas \
   --warmup 10 \
-  --repeat 100
+  --repeat 50 \
+  --run-dir perf/runs/gpu_runner_demo_a10_20260511
 ```
 
-Run the same case with an external CUTLASS/cuBLAS backend command:
+查看已归档的小型 demo 对比结果：
 
 ```bash
-python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
-  --backend mlir_nvvm \
-  --backend cutlass \
-  --backend-command cutlass='./build/bin/mini-compiler-kernel-bench --backend cutlass --case perf/cases/gpu_runner_demo.json' \
-  --warmup 10 \
-  --repeat 100
+python3 ./scripts/perf_compare.py \
+  perf/runs/gpu_runner_demo_a10_20260511/summary.json
 ```
 
-Profile the compiler-generated route with Nsight Systems:
+在 A10 云 GPU 上运行大型 `linear + relu` 的 CUDA/cuBLAS 对比：
 
 ```bash
-./scripts/perf_profile_nsys.sh perf/runs/nsys_gpu_runner_demo \
+python3 ./scripts/perf_run.py \
+  perf/cases/linear_relu_f32_m1024_n1024_k1024.json \
+  --warmup 10 \
+  --repeat 50 \
+  --run-dir perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511
+```
+
+查看已归档的大型 case 对比结果：
+
+```bash
+python3 ./scripts/perf_compare.py \
+  perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json
+```
+
+采集 `mlir_nvvm` 路线的 Nsight Systems 报告：
+
+```bash
+./scripts/perf_profile_nsys.sh \
+  perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys \
   ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
-    --warmup=10 \
-    --repeat=100 \
+    --warmup=1 \
+    --repeat=2 \
     --cubin-format=fatbin
 ```
 
-Profile the compiler-generated route with Nsight Compute:
+采集手写 CUDA kernel 的 Nsight Compute 报告：
 
 ```bash
-./scripts/perf_profile_ncu.sh perf/runs/ncu_gpu_runner_demo \
-  ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
-    --warmup=5 \
-    --repeat=20 \
-    --cubin-format=fatbin
+./scripts/perf_profile_ncu.sh \
+  perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu \
+  ./build/bin/mini-compiler-kernel-bench \
+    --backend cuda_hand \
+    --case perf/cases/gpu_runner_demo.json \
+    --warmup 1 \
+    --repeat 1
 ```
 
 Translate the LLVM dialect output into textual LLVM IR:

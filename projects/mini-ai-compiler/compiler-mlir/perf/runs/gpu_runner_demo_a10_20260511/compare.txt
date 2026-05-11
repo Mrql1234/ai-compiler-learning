@@ -1,0 +1,7 @@
+case: gpu_runner_demo
+baseline: cublas
+backend        correct   median ms   mean ms    gap
+-------------  --------  ----------  --------  ------
+mlir_nvvm      yes            0.479     0.607  40.69x
+cuda_hand      yes            0.006     0.006   0.54x
+cublas         yes            0.012     0.012   1.00x

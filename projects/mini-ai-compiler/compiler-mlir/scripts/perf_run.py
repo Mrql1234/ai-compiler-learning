@@ -116,6 +116,23 @@ def parse_backend_commands(values: list[str]) -> dict[str, list[str]]:
     return commands
 
 
+def substitute_command_templates(
+    command: list[str], replacements: dict[str, str]
+) -> tuple[list[str], bool]:
+    """Replace simple {name} placeholders in a backend command."""
+    formatted: list[str] = []
+    used_template = False
+    for part in command:
+        next_part = part
+        for name, value in replacements.items():
+            token = "{" + name + "}"
+            if token in next_part:
+                used_template = True
+                next_part = next_part.replace(token, value)
+        formatted.append(next_part)
+    return formatted, used_template
+
+
 def resolve_project_path(path: str | Path) -> Path:
     candidate = Path(path)
     if candidate.is_absolute():
@@ -237,6 +254,7 @@ def run_mlir_backend(
 
 
 def run_external_backend(
+    case_path: Path,
     backend: dict[str, Any],
     commands: dict[str, list[str]],
     args: argparse.Namespace,
@@ -255,12 +273,24 @@ def run_external_backend(
             f"External backend '{backend_name}' needs --backend-command {backend_name}='<command>'"
         )
 
+    json_path = run_dir / f"{backend_name}.json"
+    replacements = {
+        "backend": backend_name,
+        "case": str(case_path.resolve()),
+        "run_dir": str(run_dir.resolve()),
+        "json_output": str(json_path.resolve()),
+        "warmup": str(args.warmup),
+        "repeat": str(args.repeat),
+    }
+    command, uses_template = substitute_command_templates(command, replacements)
+
     timings_ms: list[float] = []
     last_completed: subprocess.CompletedProcess[str] | None = None
-    total_runs = args.warmup + args.repeat
-    for iteration in range(total_runs):
+    result_value: float | None = None
+    artifacts: dict[str, Any] = {}
+    if uses_template or backend.get("run_once", False):
         start = time.perf_counter()
-        completed = subprocess.run(
+        last_completed = subprocess.run(
             command,
             check=False,
             text=True,
@@ -268,14 +298,33 @@ def run_external_backend(
             cwd=PROJECT_DIR,
         )
         duration_ms = (time.perf_counter() - start) * 1000.0
-        last_completed = completed
-        if completed.returncode != 0:
-            break
-        if iteration >= args.warmup:
+        if last_completed.returncode == 0 and json_path.exists():
+            result_value, timings_ms, runner_payload = load_runner_json(json_path)
+            artifacts.update(runner_payload.get("artifacts", {}))
+        elif last_completed.returncode == 0:
+            result_value = extract_float(last_completed.stdout)
             timings_ms.append(duration_ms)
+    else:
+        total_runs = args.warmup + args.repeat
+        for iteration in range(total_runs):
+            start = time.perf_counter()
+            completed = subprocess.run(
+                command,
+                check=False,
+                text=True,
+                capture_output=True,
+                cwd=PROJECT_DIR,
+            )
+            duration_ms = (time.perf_counter() - start) * 1000.0
+            last_completed = completed
+            if completed.returncode != 0:
+                break
+            if iteration >= args.warmup:
+                timings_ms.append(duration_ms)
+        assert last_completed is not None
+        result_value = extract_float(last_completed.stdout)
 
     assert last_completed is not None
-    json_path = run_dir / f"{backend_name}.json"
     backend_result = BackendResult(
         name=backend_name,
         kind=backend["kind"],
@@ -283,10 +332,10 @@ def run_external_backend(
         returncode=last_completed.returncode,
         stdout=last_completed.stdout,
         stderr=last_completed.stderr,
-        result=extract_float(last_completed.stdout),
+        result=result_value,
         timings_ms=timings_ms,
         json_path=json_path,
-        artifacts={},
+        artifacts=artifacts,
     )
     write_backend_json(backend_result)
     return backend_result
@@ -324,6 +373,7 @@ def write_summary(case: dict[str, Any], run_dir: Path, results: list[BackendResu
             "input": case.get("input"),
             "entry_function": case.get("entry_function", "run"),
             "result_type": case.get("result_type", "f32"),
+            "problem": case.get("problem", {}),
             "tolerance": case.get("tolerance", {}),
         },
         "results": [
@@ -384,7 +434,9 @@ def main() -> int:
         if backend["kind"] == "mlir_gpu_runner":
             results.append(run_mlir_backend(case, backend, args, run_dir))
         elif backend["kind"] == "external":
-            results.append(run_external_backend(backend, backend_commands, args, run_dir))
+            results.append(
+                run_external_backend(args.case, backend, backend_commands, args, run_dir)
+            )
         else:
             raise SystemExit(f"Unsupported backend kind: {backend['kind']}")
 

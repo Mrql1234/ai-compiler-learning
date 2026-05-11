@@ -227,10 +227,36 @@ struct MiniGpuHostSharedPass
     CopyInAndCopyBack
   };
 
-  static LaunchOperandPlan classifyLaunchOperand(Value source) {
+  static bool isKernelOperandWritten(gpu::LaunchFuncOp launch,
+                                     unsigned kernelOperandIndex) {
+    auto kernel = SymbolTable::lookupNearestSymbolFrom<gpu::GPUFuncOp>(
+        launch, launch.getKernelAttr());
+    if (!kernel || kernel.getBody().empty())
+      return true;
+    Block &entryBlock = kernel.getBody().front();
+    if (kernelOperandIndex >= entryBlock.getNumArguments())
+      return true;
+
+    Value kernelArgument = entryBlock.getArgument(kernelOperandIndex);
+    bool written = false;
+    kernel.walk([&](memref::StoreOp store) {
+      if (store.getMemref() == kernelArgument) {
+        written = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    return written;
+  }
+
+  static LaunchOperandPlan classifyLaunchOperand(Value source,
+                                                 gpu::LaunchFuncOp launch,
+                                                 unsigned kernelOperandIndex) {
     if (source.getDefiningOp<gpu::AllocOp>())
       return LaunchOperandPlan::AlreadyDeviceVisible;
     if (isReadOnlySource(source))
+      return LaunchOperandPlan::CopyInOnly;
+    if (!isKernelOperandWritten(launch, kernelOperandIndex))
       return LaunchOperandPlan::CopyInOnly;
     return LaunchOperandPlan::CopyInAndCopyBack;
   }
@@ -288,12 +314,15 @@ struct MiniGpuHostSharedPass
       DenseMap<Value, Value> copiedGpuOperands;
       SmallVector<std::pair<Value, Value>> copyBacks;
       DenseSet<Value> seenCopyBackSources;
-      for (OpOperand &operand : launch->getOpOperands()) {
+      MutableOperandRange kernelOperands = launch.getKernelOperandsMutable();
+      for (auto [kernelOperandIndex, operand] :
+           llvm::enumerate(kernelOperands)) {
         auto memrefType = dyn_cast<MemRefType>(operand.get().getType());
         if (!memrefType)
           continue;
         Value originalValue = operand.get();
-        LaunchOperandPlan plan = classifyLaunchOperand(originalValue);
+        LaunchOperandPlan plan = classifyLaunchOperand(
+            originalValue, launch, static_cast<unsigned>(kernelOperandIndex));
         if (plan == LaunchOperandPlan::AlreadyDeviceVisible)
           continue;
         Value sharedValue =

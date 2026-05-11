@@ -94,3 +94,58 @@ else()
     MINI_CUDA_RUNTIME_WRAPPERS_PATH=""
   )
 endif()
+
+if(MINI_NVTX_LIBRARY)
+  target_compile_definitions(mini-compiler-gpu-runner
+    PRIVATE
+    MINI_ENABLE_NVTX
+  )
+  target_include_directories(mini-compiler-gpu-runner
+    PRIVATE
+    ${CUDAToolkit_INCLUDE_DIRS}
+  )
+  target_link_libraries(mini-compiler-gpu-runner
+    PRIVATE
+    ${MINI_NVTX_LIBRARY}
+  )
+endif()
+
+if(CUDAToolkit_FOUND)
+  add_executable(mini-compiler-kernel-bench
+    mini-compiler-kernel-bench.cpp
+    KernelBenchCuda.cu
+  )
+
+  target_include_directories(mini-compiler-kernel-bench
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${LLVM_INCLUDE_DIRS}
+  )
+
+  target_link_libraries(mini-compiler-kernel-bench
+    PRIVATE
+    LLVMSupport
+    CUDA::cudart
+    CUDA::cublas
+  )
+
+  set_target_properties(mini-compiler-kernel-bench PROPERTIES
+    CUDA_SEPARABLE_COMPILATION OFF
+    CUDA_ARCHITECTURES "${MINI_CUDA_ARCHITECTURES}"
+  )
+
+  if(MINI_NVTX_LIBRARY)
+    target_compile_definitions(mini-compiler-kernel-bench
+      PRIVATE
+      MINI_ENABLE_NVTX
+    )
+    target_include_directories(mini-compiler-kernel-bench
+      PRIVATE
+      ${CUDAToolkit_INCLUDE_DIRS}
+    )
+    target_link_libraries(mini-compiler-kernel-bench
+      PRIVATE
+      ${MINI_NVTX_LIBRARY}
+    )
+  endif()
+endif()

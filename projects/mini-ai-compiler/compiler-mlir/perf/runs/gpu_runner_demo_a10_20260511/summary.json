@@ -1,0 +1,73 @@
+{
+  "case": {
+    "name": "gpu_runner_demo",
+    "description": "Small runnable GPU demo used as the first compiler-generated kernel perf case.",
+    "input": "test/gpu_runner_demo.mlir",
+    "entry_function": "run",
+    "result_type": "f32",
+    "problem": {
+      "operation": "linear_relu",
+      "data_profile": "gpu_runner_demo",
+      "m": 2,
+      "n": 8,
+      "k": 4
+    },
+    "tolerance": {
+      "abs": 1e-05,
+      "rel": 1e-05
+    }
+  },
+  "results": [
+    {
+      "backend": "mlir_nvvm",
+      "kind": "mlir_gpu_runner",
+      "returncode": 0,
+      "result": 3.5,
+      "correct": true,
+      "latency_ms": {
+        "min": 0.141505,
+        "mean": 0.60650494,
+        "median": 0.4790835,
+        "max": 1.399794
+      },
+      "json_path": "perf/runs/gpu_runner_demo_a10_20260511/mlir_nvvm.json",
+      "artifacts": {
+        "lowered_mlir": "perf/runs/gpu_runner_demo_a10_20260511/mlir_nvvm_lowered.mlir"
+      }
+    },
+    {
+      "backend": "cuda_hand",
+      "kind": "external",
+      "returncode": 0,
+      "result": 3.5,
+      "correct": true,
+      "latency_ms": {
+        "min": 0.005942,
+        "mean": 0.00643648,
+        "median": 0.0063425,
+        "max": 0.007084
+      },
+      "json_path": "perf/runs/gpu_runner_demo_a10_20260511/cuda_hand.json",
+      "artifacts": {
+        "timing_mode": "host_wall_launch_to_sync"
+      }
+    },
+    {
+      "backend": "cublas",
+      "kind": "external",
+      "returncode": 0,
+      "result": 3.5,
+      "correct": true,
+      "latency_ms": {
+        "min": 0.010691,
+        "mean": 0.01183926,
+        "median": 0.011773,
+        "max": 0.017818
+      },
+      "json_path": "perf/runs/gpu_runner_demo_a10_20260511/cublas.json",
+      "artifacts": {
+        "timing_mode": "host_wall_launch_to_sync"
+      }
+    }
+  ]
+}

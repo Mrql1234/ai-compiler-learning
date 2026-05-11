@@ -1,0 +1,15 @@
+Generating SQLite file perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys.sqlite from perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys.nsys-rep
+Processing [perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys.sqlite] with [/usr/local/cuda-12.8/nsight-systems-2024.6.2/host-linux-x64/reports/nvtx_pushpop_sum.py]... 
+
+ ** NVTX Push/Pop Range Summary (nvtx_pushpop_sum):
+
+ Time (%)  Total Time (ns)  Instances   Avg (ns)     Med (ns)    Min (ns)   Max (ns)   StdDev (ns)      Range     
+ --------  ---------------  ---------  -----------  -----------  ---------  ---------  -----------  --------------
+     39.1        363998252          1  363998252.0  363998252.0  363998252  363998252          0.0  :warmup       
+     34.7        323569049          4   80892262.3      28239.5      25731  323486839  161729717.9  :module_load  
+     25.7        239919921          1  239919921.0  239919921.0  239919921  239919921          0.0  :compile      
+      0.3          3101591          1    3101591.0    3101591.0    3101591    3101591          0.0  :engine_create
+      0.1          1049244          1    1049244.0    1049244.0    1049244    1049244          0.0  :benchmark    
+      0.0           285453         12      23787.8       7005.5       5225     206850      57674.0  :kernel_launch
+      0.0              527          1        527.0        527.0        527        527          0.0  :verify       
+

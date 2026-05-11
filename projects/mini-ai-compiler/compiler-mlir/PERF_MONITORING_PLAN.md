@@ -1,334 +1,250 @@
-# compiler-mlir GPU Performance Monitoring Plan
+# compiler-mlir GPU 性能监控方案
 
-This document describes the performance monitoring system for the
-`compiler-mlir` GPU route. It is intentionally split into local, GPU-independent
-work and cloud GPU work so development can continue on a CPU-only machine and
-profiling can continue later on an A10 or another CUDA server.
+本文记录 `compiler-mlir` GPU 路线的性能监控工程。当前目标不是追求完整工业级 benchmark，而是把同一个 case 在编译器生成 kernel、手写 CUDA kernel、第三方库 backend 之间做可重复对照，并把运行结果和 Nsight 报告落盘到仓库中，便于后续在其他机器上直接查看。
 
-## Goals
+## 目标
 
-The performance system compares three kernel sources with the same case,
-correctness rule, timing protocol, and report format:
+性能监控系统比较三类 backend：
 
-- `mlir_nvvm`: compiler-generated kernels from `mini-compiler-gpu-runner`
-- `cuda_hand`: hand-written CUDA kernels
-- `cutlass` or another library backend: third-party kernels such as CUTLASS,
-  cuBLAS, or cuDNN
+- `mlir_nvvm`：由 `mini-compiler-gpu-runner` 走 `mini -> gpu -> nvvm -> fatbin -> ExecutionEngine` 的编译器生成路线
+- `cuda_hand`：手写 CUDA kernel baseline
+- `cublas`：cuBLAS SGEMM 加 CUDA bias/ReLU epilogue 的库 baseline
 
-The comparison should answer:
+对比时统一使用：
 
-- whether the compiler-generated kernel is correct
-- how far it is from a hand-written CUDA baseline
-- how far it is from a third-party library baseline
-- whether the bottleneck is launch overhead, memcpy, runtime overhead, or kernel
-  execution
-- which compiler pass, lowering choice, or runtime wrapper should be optimized
+- 同一个 case JSON
+- 同一套 warmup/repeat 协议
+- 同一套 correctness tolerance
+- 同一套 JSON 输出格式
+- 同一个 `perf_compare.py` 汇总入口
 
-## Current GPU-Independent Pieces
+重点回答：
 
-These pieces can be developed and tested without local CUDA libraries:
+- 编译器生成 kernel 是否正确
+- `mlir_nvvm` 和手写 CUDA 的差距
+- `mlir_nvvm` 和 cuBLAS 库路线的差距
+- 主要瓶颈在 compile、JIT engine、launch、memcpy、kernel execution 还是 wrapper runtime
 
-- `perf/cases/gpu_runner_demo.json`: first shared perf case definition
-- `scripts/perf_run.py`: backend dispatcher and unified JSON result writer
-- `scripts/perf_compare.py`: summary comparison table
-- `scripts/perf_profile_nsys.sh`: Nsight Systems wrapper
-- `scripts/perf_profile_ncu.sh`: Nsight Compute wrapper
-- `perf/README.md`: quick command reference
+## 入口文件
 
-The GPU runner also has GPU-independent command-line plumbing for profiling:
+核心入口：
 
-- `--warmup=N`
-- `--repeat=N`
-- `--json-output=path`
-- `--dump-lowered=path`
-- `--ptxas-cmd-options=...`
+- `perf/cases/gpu_runner_demo.json`
+  - 小型 demo case
+  - 已接入 `mlir_nvvm`、`cuda_hand`、`cublas`
+  - 适合 smoke test、Nsight Systems、Nsight Compute
+- `perf/cases/linear_relu_f32_m1024_n1024_k1024.json`
+  - 大型 `linear + relu` case
+  - 已接入 `cuda_hand`、`cublas`
+  - 适合观察真实 GPU 吞吐差距
+- `scripts/perf_run.py`
+  - 统一运行入口
+  - 负责调度 backend、写 backend JSON、写 `summary.json`
+- `scripts/perf_compare.py`
+  - 读取 `summary.json`
+  - 输出 correctness、median/mean latency、相对 gap
+- `scripts/perf_profile_nsys.sh`
+  - Nsight Systems 包装脚本
+  - 用于查看 compile、engine_create、warmup、benchmark、module_load、kernel_launch 等 NVTX range
+- `scripts/perf_profile_ncu.sh`
+  - Nsight Compute 包装脚本
+  - 用于查看 kernel 级 occupancy、memory throughput、stall reason 等指标
+- `tools/mini-compiler-gpu-runner.cpp`
+  - `mlir_nvvm` backend 主入口
+- `tools/mini-compiler-kernel-bench.cpp`
+  - 外部 CUDA benchmark 主入口
+- `tools/KernelBenchCuda.cu`
+  - `cuda_hand` 和 `cublas` 的 CUDA 实现
 
-## Architecture
+已归档结果入口：
 
-The top-level flow is:
+- `perf/runs/gpu_runner_demo_a10_20260511/summary.json`
+- `perf/runs/gpu_runner_demo_a10_20260511/compare.txt`
+- `perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json`
+- `perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/compare.txt`
+- `perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys.nsys-rep`
+- `perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys_nvtx_summary.txt`
+- `perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu.ncu-rep`
+- `perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu_details.txt`
+- `perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu_session.txt`
 
-```text
-perf case
-  -> perf_run.py
-     -> mlir_nvvm backend
-        -> mini-compiler-gpu-runner
-        -> mini -> gpu -> nvvm -> fatbin
-        -> ExecutionEngine
-     -> cuda_hand backend
-        -> external benchmark command
-        -> hand-written CUDA kernel
-     -> cutlass backend
-        -> external benchmark command
-        -> CUTLASS/cuBLAS/cuDNN kernel
-  -> per-backend JSON
-  -> summary.json
-  -> perf_compare.py
-  -> Nsight artifacts when profiling is enabled
-```
+## 构建命令
 
-The shared contract is a case JSON plus one JSON output per backend. This keeps
-the comparison layer independent from how each kernel is implemented.
-
-## Case Contract
-
-A case file should define:
-
-- `name`: stable case identifier
-- `input`: MLIR input used by `mlir_nvvm`
-- `entry_function`: runner entry point
-- `result_type`: currently `f32` or `void`
-- `tolerance`: `abs` and `rel` correctness tolerance
-- `backends`: backend definitions
-
-Current example:
-
-```bash
-perf/cases/gpu_runner_demo.json
-```
-
-Future larger cases should be added alongside it:
-
-```text
-perf/cases/linear_relu_f32_m1024_n1024_k1024.json
-perf/cases/matmul_f32_m2048_n2048_k2048.json
-perf/cases/qlinear_int8_m1024_n1024_k1024.json
-```
-
-## Result Contract
-
-Each backend result should provide:
-
-- backend name
-- backend kind
-- command
-- return code
-- scalar result when available
-- correctness status
-- `timings_ms`
-- latency summary: min, mean, median, max
-- artifact paths, such as lowered MLIR or Nsight output
-
-The run directory contains:
-
-```text
-perf/runs/<case>_<timestamp>/
-  mlir_nvvm.json
-  cuda_hand.json
-  cutlass.json
-  mlir_nvvm_lowered.mlir
-  summary.json
-```
-
-## Local CPU-Only Workflow
-
-Use this workflow on a machine without CUDA libraries to validate the harness
-itself:
-
-```bash
-python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
-  --backend cuda_hand \
-  --backend-command cuda_hand='printf 3.5' \
-  --warmup 1 \
-  --repeat 2 \
-  --run-dir /tmp/compiler-mlir-perf-smoke
-```
-
-Then compare the generated summary:
-
-```bash
-python3 ./scripts/perf_compare.py /tmp/compiler-mlir-perf-smoke/summary.json
-```
-
-This does not test GPU execution. It only verifies that external backend
-dispatch, JSON writing, correctness comparison, and summary reporting work.
-
-## Cloud GPU Workflow
-
-On an A10 or another CUDA machine, first configure and build with CUDA support:
+在 A10 云 GPU 环境中使用：
 
 ```bash
 cmake -S . -B build \
   -G Ninja \
-  -DLLVM_DIR=/home/ql/code/llvm_clang_static_analyzer/build-mlir/lib/cmake/llvm \
-  -DMLIR_DIR=/home/ql/code/llvm_clang_static_analyzer/build-mlir/lib/cmake/mlir
+  -DLLVM_DIR=/home/ql/toolchains/llvm_clang_static_analyzer/build/lib/cmake/llvm \
+  -DMLIR_DIR=/home/ql/toolchains/llvm_clang_static_analyzer/build/lib/cmake/mlir \
+  -DMINI_CUDA_ARCHITECTURES=86
 cmake --build build -j2
 ```
 
-Run the compiler-generated baseline:
+`MINI_CUDA_ARCHITECTURES=86` 对应 NVIDIA A10 的 `sm_86`。
 
-```bash
-python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
-  --backend mlir_nvvm \
-  --warmup 10 \
-  --repeat 100
-```
+## 运行命令
 
-Run a hand CUDA backend once a benchmark binary exists:
+运行小型 demo 的三 backend 对比：
 
 ```bash
 python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
   --backend mlir_nvvm \
   --backend cuda_hand \
-  --backend-command cuda_hand='./build/bin/mini-compiler-kernel-bench --backend cuda_hand --case perf/cases/gpu_runner_demo.json' \
+  --backend cublas \
   --warmup 10 \
-  --repeat 100
+  --repeat 50 \
+  --run-dir perf/runs/gpu_runner_demo_a10_20260511
 ```
 
-Run a third-party backend once a CUTLASS/cuBLAS benchmark exists:
+查看小型 demo 对比表：
 
 ```bash
-python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
-  --backend mlir_nvvm \
-  --backend cutlass \
-  --backend-command cutlass='./build/bin/mini-compiler-kernel-bench --backend cutlass --case perf/cases/gpu_runner_demo.json' \
+python3 ./scripts/perf_compare.py \
+  perf/runs/gpu_runner_demo_a10_20260511/summary.json
+```
+
+运行大型 `linear + relu` 的 CUDA/cuBLAS 对比：
+
+```bash
+python3 ./scripts/perf_run.py \
+  perf/cases/linear_relu_f32_m1024_n1024_k1024.json \
   --warmup 10 \
-  --repeat 100
+  --repeat 50 \
+  --run-dir perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511
 ```
 
-Compare a run:
+查看大型 case 对比表：
 
 ```bash
-python3 ./scripts/perf_compare.py perf/runs/<run-dir>/summary.json
+python3 ./scripts/perf_compare.py \
+  perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json
 ```
 
-## Nsight Workflow
-
-Use Nsight Systems to inspect runtime-level behavior:
-
-```bash
-./scripts/perf_profile_nsys.sh perf/runs/nsys_gpu_runner_demo \
-  ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
-    --warmup=10 \
-    --repeat=100 \
-    --cubin-format=fatbin
-```
-
-Use Nsight Compute to inspect kernel-level metrics:
-
-```bash
-./scripts/perf_profile_ncu.sh perf/runs/ncu_gpu_runner_demo \
-  ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
-    --warmup=5 \
-    --repeat=20 \
-    --cubin-format=fatbin
-```
-
-Nsight Systems should be used first to decide whether the bottleneck is:
-
-- launch overhead
-- host/device transfer
-- CUDA synchronization
-- runtime wrapper overhead
-- actual kernel time
-
-Nsight Compute should then be used to inspect:
-
-- achieved occupancy
-- register pressure
-- memory throughput
-- global load/store efficiency
-- shared memory behavior
-- warp stall reasons
-- tensor core utilization for library or Tensor Core kernels
-
-## Cloud Implementation Tasks
-
-### Task 1: Stabilize `mlir_nvvm`
-
-- Run `a10_preflight.sh`
-- Run `mini-compiler-gpu-runner` with `--cubin-format=fatbin`
-- Confirm JSON output is written
-- Confirm `--dump-lowered` writes the lowered MLIR artifact
-- Confirm `perf_run.py --backend mlir_nvvm` produces `summary.json`
-
-### Task 2: Add Hand CUDA Backend
-
-Create a future benchmark binary such as:
-
-```text
-tools/mini-compiler-kernel-bench.cpp
-```
-
-Required command shape:
+直接运行手写 CUDA benchmark：
 
 ```bash
 ./build/bin/mini-compiler-kernel-bench \
   --backend cuda_hand \
   --case perf/cases/gpu_runner_demo.json \
   --warmup 10 \
-  --repeat 100
+  --repeat 50 \
+  --json-output /tmp/cuda_hand.json
 ```
 
-The first version may simply print the scalar result to stdout. A later version
-should write the same JSON result contract as `perf_run.py`.
-
-Recommended first kernel:
-
-```text
-linear + relu, f32, fixed small shape matching gpu_runner_demo
-```
-
-### Task 3: Add Third-Party Backend
-
-Start with cuBLAS for matmul or CUTLASS for fused GEMM epilogues:
+直接运行 cuBLAS benchmark：
 
 ```bash
 ./build/bin/mini-compiler-kernel-bench \
-  --backend cutlass \
+  --backend cublas \
   --case perf/cases/linear_relu_f32_m1024_n1024_k1024.json \
   --warmup 10 \
-  --repeat 100
+  --repeat 50 \
+  --json-output /tmp/cublas.json
 ```
 
-The third-party backend should use the same input values and tolerance as the
-compiler-generated route.
+## Nsight 命令
 
-### Task 4: Add NVTX Ranges
+采集 `mlir_nvvm` 路线的 Nsight Systems 报告：
 
-Add NVTX ranges in runner or runtime code for:
+```bash
+./scripts/perf_profile_nsys.sh \
+  perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys \
+  ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
+    --warmup=1 \
+    --repeat=2 \
+    --cubin-format=fatbin
+```
 
-- `compile`
-- `engine_create`
-- `warmup`
-- `benchmark`
-- `kernel_launch`
-- `copyback`
-- `verify`
+导出 NVTX 文本摘要：
 
-This makes Nsight Systems readable and connects runtime events back to the perf
-case.
+```bash
+nsys stats --force-export=true \
+  --report nvtx_pushpop_sum \
+  perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys.nsys-rep \
+  | tee perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys_nvtx_summary.txt
+```
 
-### Task 5: Add Larger Cases
+采集手写 CUDA kernel 的 Nsight Compute 报告：
 
-After the small demo is stable, add cases large enough to expose meaningful GPU
-behavior:
+```bash
+./scripts/perf_profile_ncu.sh \
+  perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu \
+  ./build/bin/mini-compiler-kernel-bench \
+    --backend cuda_hand \
+    --case perf/cases/gpu_runner_demo.json \
+    --warmup 1 \
+    --repeat 1
+```
 
-- `linear_relu_f32_m1024_n1024_k1024`
-- `matmul_f32_m2048_n2048_k2048`
-- `qlinear_int8_m1024_n1024_k1024`
+导出 Nsight Compute 文本详情：
 
-Each case should include a compiler-generated backend, a hand CUDA backend, and
-a third-party backend when available.
+```bash
+ncu --import perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu.ncu-rep \
+  --page details \
+  | tee perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu_details.txt
 
-## Optimization Loop
+ncu --import perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu.ncu-rep \
+  --page session \
+  | tee perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu_session.txt
+```
 
-Use this loop for every performance change:
+如果 `ncu` 报 `ERR_NVGPUCTRPERM`，说明当前用户没有 GPU performance counters 权限。当前机器已通过驱动参数确认：
+
+```bash
+grep RmProfilingAdminOnly /proc/driver/nvidia/params
+```
+
+期望输出：
 
 ```text
-1. Run perf_run.py for all available backends.
-2. Run perf_compare.py to quantify the gap.
-3. Use Nsight Systems to classify runtime vs kernel bottlenecks.
-4. Use Nsight Compute for kernel-level bottlenecks.
-5. Update compiler passes, lowering options, hand CUDA code, or library config.
-6. Re-run the same case.
-7. Save the new summary under perf/baselines/<gpu>/ when it becomes a baseline.
+RmProfilingAdminOnly: 0
 ```
 
-The key metric is the gap between:
+## 当前 A10 结果摘要
 
-- `mlir_nvvm` and `cuda_hand`
-- `mlir_nvvm` and `cutlass`
+`gpu_runner_demo` 的归档结果：
 
-The hand CUDA baseline explains what a direct expert kernel can do. The
-third-party backend shows the expected high-performance library ceiling. The
-compiler-generated route is the main optimization target.
+```text
+case: gpu_runner_demo
+baseline: cublas
+backend        correct   median ms   mean ms    gap
+-------------  --------  ----------  --------  ------
+mlir_nvvm      yes            0.479     0.607  40.69x
+cuda_hand      yes            0.006     0.006   0.54x
+cublas         yes            0.012     0.012   1.00x
+```
+
+`linear_relu_f32_m1024_n1024_k1024` 的归档结果：
+
+```text
+case: linear_relu_f32_m1024_n1024_k1024
+baseline: cublas
+backend        correct   median ms   mean ms    gap
+-------------  --------  ----------  --------  ------
+cuda_hand      yes            5.109     5.109  30.63x
+cublas         yes            0.167     0.167   1.00x
+```
+
+Nsight Systems 的 NVTX 摘要显示 `mlir_nvvm` 当前主要时间集中在：
+
+- `warmup`
+- `module_load`
+- `compile`
+- `engine_create`
+- `benchmark`
+- `kernel_launch`
+
+Nsight Compute 的手写 CUDA demo 结论是：小型 demo grid 过小，无法填满 A10 的 72 个 SM，报告中可以看到低 occupancy、低 SM throughput，以及 grid size 太小的优化提示。这符合该 demo 作为 smoke test 的定位；大型 case 更适合作为吞吐性能对比。
+
+## 后续优化循环
+
+每次优化建议按下面流程执行：
+
+1. 用 `perf_run.py` 跑所有可用 backend。
+2. 用 `perf_compare.py` 看 correctness 和 gap。
+3. 用 Nsight Systems 判断瓶颈属于 compile/JIT/runtime/launch/memcpy/kernel 哪一类。
+4. 用 Nsight Compute 看 kernel 内部瓶颈。
+5. 修改 lowering、runtime wrapper、kernel mapping、手写 CUDA 或库 backend 配置。
+6. 重新跑同一个 case。
+7. 将稳定结果保存到 `perf/runs/` 和 `perf/profiles/`。

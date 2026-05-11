@@ -31,6 +31,10 @@
 #include <string>
 #include <vector>
 
+#ifdef MINI_ENABLE_NVTX
+#include "nvtx3/nvToolsExt.h"
+#endif
+
 #ifndef MINI_CUDA_RUNTIME_WRAPPERS_PATH
 #define MINI_CUDA_RUNTIME_WRAPPERS_PATH ""
 #endif
@@ -46,6 +50,22 @@
 using namespace mlir;
 
 namespace {
+
+class NvtxRange {
+public:
+  explicit NvtxRange(const char *name) {
+#ifdef MINI_ENABLE_NVTX
+    nvtxRangePushA(name);
+#else
+    (void)name;
+#endif
+  }
+  ~NvtxRange() {
+#ifdef MINI_ENABLE_NVTX
+    nvtxRangePop();
+#endif
+  }
+};
 
 struct RunnerOptions {
   std::string inputFilename;
@@ -396,18 +416,23 @@ int main(int argc, char **argv) {
 
   MLIRContext context(registry);
   context.getOrLoadDialect<mini::MiniDialect>();
-  auto module = loadModule(context, runnerOptions.inputFilename);
-  if (!module) {
-    llvm::errs() << "Failed to parse input module\n";
-    return 1;
-  }
+  OwningOpRef<ModuleOp> module;
 
-  if (failed(runMiniGpuLowering(*module, runnerOptions))) {
-    llvm::errs() << "Failed to run GPU lowering pipeline\n";
-    return 1;
+  {
+    NvtxRange range("compile");
+    module = loadModule(context, runnerOptions.inputFilename);
+    if (!module) {
+      llvm::errs() << "Failed to parse input module\n";
+      return 1;
+    }
+
+    if (failed(runMiniGpuLowering(*module, runnerOptions))) {
+      llvm::errs() << "Failed to run GPU lowering pipeline\n";
+      return 1;
+    }
+    if (failed(dumpModule(*module, runnerOptions.dumpLowered)))
+      return 1;
   }
-  if (failed(dumpModule(*module, runnerOptions.dumpLowered)))
-    return 1;
 
   ExecutionEngineOptions engineOptions;
   engineOptions.llvmModuleBuilder = convertMLIRModule;
@@ -417,15 +442,19 @@ int main(int argc, char **argv) {
       MINI_MLIR_C_RUNNER_UTILS_PATH,
   };
 
-  auto maybeEngine =
-      ExecutionEngine::create(module->getOperation(), engineOptions);
-  if (!maybeEngine) {
-    llvm::errs() << "Failed to create execution engine: "
-                 << llvm::toString(maybeEngine.takeError()) << "\n";
-    return 1;
+  std::unique_ptr<ExecutionEngine> engine;
+  {
+    NvtxRange range("engine_create");
+    auto maybeEngine =
+        ExecutionEngine::create(module->getOperation(), engineOptions);
+    if (!maybeEngine) {
+      llvm::errs() << "Failed to create execution engine: "
+                   << llvm::toString(maybeEngine.takeError()) << "\n";
+      return 1;
+    }
+    engine = std::move(*maybeEngine);
   }
 
-  auto engine = std::move(*maybeEngine);
   float result = 0.0f;
   bool hasResult = runnerOptions.resultType == "f32";
   auto runOnce = [&]() -> int {
@@ -438,24 +467,33 @@ int main(int argc, char **argv) {
     return 1;
   };
 
-  for (int iteration = 0; iteration < runnerOptions.warmup; ++iteration) {
-    if (runOnce() != 0)
-      return 1;
+  {
+    NvtxRange range("warmup");
+    for (int iteration = 0; iteration < runnerOptions.warmup; ++iteration) {
+      if (runOnce() != 0)
+        return 1;
+    }
   }
 
   std::vector<double> timingsMs;
   timingsMs.reserve(static_cast<size_t>(runnerOptions.repeat));
-  for (int iteration = 0; iteration < runnerOptions.repeat; ++iteration) {
-    auto start = std::chrono::steady_clock::now();
-    if (runOnce() != 0)
-      return 1;
-    auto end = std::chrono::steady_clock::now();
-    std::chrono::duration<double, std::milli> elapsed = end - start;
-    timingsMs.push_back(elapsed.count());
+  {
+    NvtxRange range("benchmark");
+    for (int iteration = 0; iteration < runnerOptions.repeat; ++iteration) {
+      auto start = std::chrono::steady_clock::now();
+      if (runOnce() != 0)
+        return 1;
+      auto end = std::chrono::steady_clock::now();
+      std::chrono::duration<double, std::milli> elapsed = end - start;
+      timingsMs.push_back(elapsed.count());
+    }
   }
 
-  if (failed(writeJsonReport(runnerOptions, timingsMs, hasResult, result)))
-    return 1;
+  {
+    NvtxRange range("verify");
+    if (failed(writeJsonReport(runnerOptions, timingsMs, hasResult, result)))
+      return 1;
+  }
 
   if (hasResult)
     llvm::outs() << result << "\n";

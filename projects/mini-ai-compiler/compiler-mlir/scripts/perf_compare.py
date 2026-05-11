@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--baseline",
-        default="cutlass",
+        default="cublas",
         help="Backend used as the gap baseline when present",
     )
     return parser.parse_args()

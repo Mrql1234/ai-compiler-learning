@@ -12,6 +12,9 @@ module attributes {gpu.container_module} {
 
   gpu.module @copyback_kernel {
     gpu.func @copyback_kernel(%arg0: memref<2x2xf32>) kernel {
+      %c0 = arith.constant 0 : index
+      %cst = arith.constant 1.000000e+00 : f32
+      memref.store %cst, %arg0[%c0, %c0] : memref<2x2xf32>
       gpu.return
     }
   }

@@ -1,0 +1,42 @@
+Launch Settings
+--------------------- ------------------------------------------------------------------------------------------------------------------------
+Launch Attribute      Value                                                                                                                   
+--------------------- ------------------------------------------------------------------------------------------------------------------------
+Profiler Command Line /usr/local/cuda-12.8/bin/../nsight-compute-2025.1.1/target/linux-desktop-glibc_2_11_3-x64/ncu --target-processes all --s
+                      et full -o perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu ./build/bin/mini-compiler-kernel-bench --backend cud
+                      a_hand --case perf/cases/gpu_runner_demo.json --warmup 1 --repeat 1                                                     
+
+Session Info
+--------------------- -------------------------------------------------------
+Session Attribute     Value                                                  
+--------------------- -------------------------------------------------------
+Created               2026-May-11 18:49:55                                   
+Host Name             iZuf6g6q4pvwbex1701go5Z                                
+Host OS               Linux - #183-Ubuntu SMP Fri Mar 6 13:29:34 UTC 2026    
+Host Architecture     x86_64                                                 
+Host Processor        Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz          
+Target Name           iZuf6g6q4pvwbex1701go5Z                                
+Target IP Addresses   172.25.12.65, 172.17.0.1, fe80::216:3eff:fe4b:ea4b%eth0
+Target OS             Linux - #183-Ubuntu SMP Fri Mar 6 13:29:34 UTC 2026    
+Target Architecture   x86_64                                                 
+Target Processor      Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz          
+CUDA Version          13.0                                                   
+PerfWorks             0.1.0                                                  
+Nsight Compute Target 2025.1.1.0 (build 35528883) (public-release)           
+
+Processes
+---------- ---------------------------------------------------------------------------------------------------------------
+Process Id Process Name                                                                                                   
+---------- ---------------------------------------------------------------------------------------------------------------
+5460       /home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/build/bin/mini-compiler-kernel-bench
+
+Device Attributes
+--------------------------- -----------
+Device Attribute            Device 0   
+--------------------------- -----------
+confidential_computing_mode No-CC      
+multiprocessor_count        72         
+display_name                NVIDIA A10 
+compute_capability_major    8          
+compute_capability_minor    6          
+total_memory                23684841472

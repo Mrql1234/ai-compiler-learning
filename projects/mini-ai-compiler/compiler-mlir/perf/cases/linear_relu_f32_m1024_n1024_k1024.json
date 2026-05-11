@@ -1,33 +1,24 @@
 {
-  "name": "gpu_runner_demo",
-  "description": "Small runnable GPU demo used as the first compiler-generated kernel perf case.",
-  "input": "test/gpu_runner_demo.mlir",
+  "name": "linear_relu_f32_m1024_n1024_k1024",
+  "description": "Large CUDA library/hand-kernel linear+relu case for cloud GPU performance monitoring.",
   "entry_function": "run",
   "result_type": "f32",
   "problem": {
     "operation": "linear_relu",
-    "data_profile": "gpu_runner_demo",
-    "m": 2,
-    "n": 8,
-    "k": 4
+    "data_profile": "deterministic",
+    "m": 1024,
+    "n": 1024,
+    "k": 1024
   },
   "tolerance": {
-    "abs": 1.0e-5,
-    "rel": 1.0e-5
+    "abs": 1.0e-3,
+    "rel": 1.0e-3
   },
   "backends": [
     {
-      "name": "mlir_nvvm",
-      "kind": "mlir_gpu_runner",
-      "enabled": true,
-      "gpu_chip": "sm_86",
-      "cubin_format": "fatbin",
-      "opt_level": 3
-    },
-    {
       "name": "cuda_hand",
       "kind": "external",
-      "enabled": false,
+      "enabled": true,
       "run_once": true,
       "command": [
         "./build/bin/mini-compiler-kernel-bench",
@@ -46,7 +37,7 @@
     {
       "name": "cublas",
       "kind": "external",
-      "enabled": false,
+      "enabled": true,
       "run_once": true,
       "command": [
         "./build/bin/mini-compiler-kernel-bench",

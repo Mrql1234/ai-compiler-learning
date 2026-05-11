@@ -6,12 +6,31 @@
 #include <cstdlib>
 
 #include "cuda.h"
+#ifdef MINI_ENABLE_NVTX
+#include "nvtx3/nvToolsExt.h"
+#endif
 
 #ifdef _WIN32
 #define MINI_CUDA_WRAPPERS_EXPORT __declspec(dllexport)
 #else
 #define MINI_CUDA_WRAPPERS_EXPORT __attribute__((visibility("default")))
 #endif
+
+class NvtxRange {
+public:
+  explicit NvtxRange(const char *name) {
+#ifdef MINI_ENABLE_NVTX
+    nvtxRangePushA(name);
+#else
+    (void)name;
+#endif
+  }
+  ~NvtxRange() {
+#ifdef MINI_ENABLE_NVTX
+    nvtxRangePop();
+#endif
+  }
+};
 
 #define CUDA_REPORT_IF_ERROR(expr)                                             \
   [](CUresult result) {                                                        \
@@ -53,6 +72,7 @@ extern "C" MINI_CUDA_WRAPPERS_EXPORT void mgpuSetDefaultDevice(int32_t device) {
 
 extern "C" MINI_CUDA_WRAPPERS_EXPORT CUmodule mgpuModuleLoad(void *data,
                                                              size_t) {
+  NvtxRange range("module_load");
   ScopedContext scopedContext;
   CUmodule module = nullptr;
   CUDA_REPORT_IF_ERROR(cuModuleLoadData(&module, data));
@@ -61,6 +81,7 @@ extern "C" MINI_CUDA_WRAPPERS_EXPORT CUmodule mgpuModuleLoad(void *data,
 
 extern "C" MINI_CUDA_WRAPPERS_EXPORT CUmodule mgpuModuleLoadJIT(void *data,
                                                                 int optLevel) {
+  NvtxRange range("module_load_jit");
   ScopedContext scopedContext;
   CUmodule module = nullptr;
   char jitErrorBuffer[4096] = {0};
@@ -148,6 +169,7 @@ extern "C" MINI_CUDA_WRAPPERS_EXPORT void mgpuMemFree(void *ptr, CUstream) {
 
 extern "C" MINI_CUDA_WRAPPERS_EXPORT void
 mgpuMemcpy(void *dst, void *src, size_t sizeBytes, CUstream stream) {
+  NvtxRange range("memcpy");
   CUDA_REPORT_IF_ERROR(cuMemcpyAsync(reinterpret_cast<CUdeviceptr>(dst),
                                      reinterpret_cast<CUdeviceptr>(src), sizeBytes,
                                      stream));
@@ -170,6 +192,7 @@ mgpuLaunchKernel(CUfunction function, intptr_t gridX, intptr_t gridY,
                  intptr_t gridZ, intptr_t blockX, intptr_t blockY,
                  intptr_t blockZ, int32_t smem, CUstream stream, void **params,
                  void **extra, size_t) {
+  NvtxRange range("kernel_launch");
   ScopedContext scopedContext;
   if (smem > 0) {
     int32_t maxShmem = 0;
