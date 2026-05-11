@@ -9,8 +9,8 @@ namespace mini {
 
 MiniDialect::MiniDialect(MLIRContext *context)
     : Dialect(getDialectNamespace(), context, TypeID::get<MiniDialect>()) {
-  addOperations<ConstantOp, LinearOp, MatmulOp, AddOp, ReluOp,
-                FusedLinearReluOp, FusedMatmulAddReluOp>();
+  addOperations<ConstantOp, LinearOp, QLinearOp, MatmulOp, AddOp, ReluOp,
+                FusedLinearReluOp, QLinearReluOp, FusedMatmulAddReluOp>();
 }
 
 ArrayRef<StringRef> ConstantOp::getAttributeNames() {
@@ -44,6 +44,59 @@ void LinearOp::build(OpBuilder &builder, OperationState &state, Type resultType,
   (void)builder;
   state.addOperands({input, weight, bias});
   state.addTypes(resultType);
+}
+
+LogicalResult LinearOp::verify() {
+  auto inputType = dyn_cast<RankedTensorType>(getInput().getType());
+  auto weightType = dyn_cast<RankedTensorType>(getWeight().getType());
+  auto biasType = dyn_cast<RankedTensorType>(getBias().getType());
+  auto resultType = dyn_cast<RankedTensorType>(getOutput().getType());
+  if (!inputType || !weightType || !biasType || !resultType)
+    return emitOpError("requires ranked tensor operands and result");
+  if (!inputType.getElementType().isF32() || !biasType.getElementType().isF32() ||
+      !resultType.getElementType().isF32())
+    return emitOpError("currently expects f32 input, bias, and result tensors");
+  auto weightElementType = weightType.getElementType();
+  if (weightElementType.isF32()) {
+    if (getWeightScaleAttr())
+      return emitOpError("must not set 'weight_scale' when weight is already f32");
+    return success();
+  }
+  if (!weightElementType.isSignlessInteger(8))
+    return emitOpError("currently supports only f32 or i8 weights");
+  if (!getWeightScaleAttr())
+    return emitOpError("requires 'weight_scale' when weight tensor element type is i8");
+  return success();
+}
+
+ArrayRef<StringRef> QLinearOp::getAttributeNames() {
+  return ArrayRef<StringRef>();
+}
+
+void QLinearOp::build(OpBuilder &builder, OperationState &state, Type resultType,
+                      Value input, Value qweight, Value bias,
+                      FloatAttr weightScale) {
+  (void)builder;
+  state.addOperands({input, qweight, bias});
+  state.addTypes(resultType);
+  state.addAttribute(getWeightScaleAttrName(), weightScale);
+}
+
+LogicalResult QLinearOp::verify() {
+  auto inputType = dyn_cast<RankedTensorType>(getInput().getType());
+  auto weightType = dyn_cast<RankedTensorType>(getWeight().getType());
+  auto biasType = dyn_cast<RankedTensorType>(getBias().getType());
+  auto resultType = dyn_cast<RankedTensorType>(getOutput().getType());
+  if (!inputType || !weightType || !biasType || !resultType)
+    return emitOpError("requires ranked tensor operands and result");
+  if (!inputType.getElementType().isF32() || !biasType.getElementType().isF32() ||
+      !resultType.getElementType().isF32())
+    return emitOpError("currently expects f32 input, bias, and result tensors");
+  if (!weightType.getElementType().isSignlessInteger(8))
+    return emitOpError("requires i8 weight tensor");
+  if (!getWeightScaleAttr())
+    return emitOpError("requires 'weight_scale' attribute");
+  return success();
 }
 
 ArrayRef<StringRef> MatmulOp::getAttributeNames() {
@@ -83,6 +136,59 @@ void FusedLinearReluOp::build(OpBuilder &builder, OperationState &state,
   (void)builder;
   state.addOperands({input, weight, bias});
   state.addTypes(resultType);
+}
+
+LogicalResult FusedLinearReluOp::verify() {
+  auto inputType = dyn_cast<RankedTensorType>(getInput().getType());
+  auto weightType = dyn_cast<RankedTensorType>(getWeight().getType());
+  auto biasType = dyn_cast<RankedTensorType>(getBias().getType());
+  auto resultType = dyn_cast<RankedTensorType>(getOutput().getType());
+  if (!inputType || !weightType || !biasType || !resultType)
+    return emitOpError("requires ranked tensor operands and result");
+  if (!inputType.getElementType().isF32() || !biasType.getElementType().isF32() ||
+      !resultType.getElementType().isF32())
+    return emitOpError("currently expects f32 input, bias, and result tensors");
+  auto weightElementType = weightType.getElementType();
+  if (weightElementType.isF32()) {
+    if (getWeightScaleAttr())
+      return emitOpError("must not set 'weight_scale' when weight is already f32");
+    return success();
+  }
+  if (!weightElementType.isSignlessInteger(8))
+    return emitOpError("currently supports only f32 or i8 weights");
+  if (!getWeightScaleAttr())
+    return emitOpError("requires 'weight_scale' when weight tensor element type is i8");
+  return success();
+}
+
+ArrayRef<StringRef> QLinearReluOp::getAttributeNames() {
+  return ArrayRef<StringRef>();
+}
+
+void QLinearReluOp::build(OpBuilder &builder, OperationState &state,
+                          Type resultType, Value input, Value qweight,
+                          Value bias, FloatAttr weightScale) {
+  (void)builder;
+  state.addOperands({input, qweight, bias});
+  state.addTypes(resultType);
+  state.addAttribute(getWeightScaleAttrName(), weightScale);
+}
+
+LogicalResult QLinearReluOp::verify() {
+  auto inputType = dyn_cast<RankedTensorType>(getInput().getType());
+  auto weightType = dyn_cast<RankedTensorType>(getWeight().getType());
+  auto biasType = dyn_cast<RankedTensorType>(getBias().getType());
+  auto resultType = dyn_cast<RankedTensorType>(getOutput().getType());
+  if (!inputType || !weightType || !biasType || !resultType)
+    return emitOpError("requires ranked tensor operands and result");
+  if (!inputType.getElementType().isF32() || !biasType.getElementType().isF32() ||
+      !resultType.getElementType().isF32())
+    return emitOpError("currently expects f32 input, bias, and result tensors");
+  if (!weightType.getElementType().isSignlessInteger(8))
+    return emitOpError("requires i8 weight tensor");
+  if (!getWeightScaleAttr())
+    return emitOpError("requires 'weight_scale' attribute");
+  return success();
 }
 
 ArrayRef<StringRef> FusedMatmulAddReluOp::getAttributeNames() {

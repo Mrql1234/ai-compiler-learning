@@ -33,13 +33,14 @@ struct RunnerOptions {
   std::string inputFilename;
   std::string entryFunction = "run";
   std::string resultType = "f32";
+  bool quantized = false;
   std::vector<std::string> sharedLibs;
 };
 
 static void printUsage(llvm::raw_ostream &os, llvm::StringRef programName) {
   os << "Usage: " << programName
      << " <input.mlir> [-e function] [--entry-point-result=f32|void]"
-        " [--shared-libs=lib1,lib2]\n";
+        " [--quantized] [--shared-libs=lib1,lib2]\n";
 }
 
 static bool parseOptions(int argc, char **argv, RunnerOptions &options,
@@ -61,6 +62,10 @@ static bool parseOptions(int argc, char **argv, RunnerOptions &options,
     }
     if (arg.consume_front("--entry-point-result=")) {
       options.resultType = arg.str();
+      continue;
+    }
+    if (arg == "--quantized") {
+      options.quantized = true;
       continue;
     }
     if (arg.consume_front("--shared-libs=")) {
@@ -103,9 +108,10 @@ static OwningOpRef<ModuleOp> loadModule(MLIRContext &context,
   return parseSourceFile<ModuleOp>(sourceMgr, &context);
 }
 
-static LogicalResult runMiniCpuLowering(ModuleOp module) {
+static LogicalResult runMiniCpuLowering(ModuleOp module, bool quantized) {
   PassManager pm(module.getContext());
-  if (failed(parsePassPipeline("mini-cpu-lowering", pm)))
+  if (failed(parsePassPipeline(
+          quantized ? "mini-quantized-cpu-lowering" : "mini-cpu-lowering", pm)))
     return failure();
   return pm.run(module);
 }
@@ -170,8 +176,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (failed(runMiniCpuLowering(*module))) {
-    llvm::errs() << "Failed to run mini-cpu-lowering pipeline\n";
+  if (failed(runMiniCpuLowering(*module, runnerOptions.quantized))) {
+    llvm::errs() << "Failed to run selected CPU lowering pipeline\n";
     return 1;
   }
 

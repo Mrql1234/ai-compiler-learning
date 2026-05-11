@@ -43,11 +43,44 @@ public:
                     mlir::Value weight, mlir::Value bias);
 
   static llvm::ArrayRef<llvm::StringRef> getAttributeNames();
+  static llvm::StringRef getWeightScaleAttrName() { return "weight_scale"; }
 
   mlir::Value getInput() { return getOperand(0); }
   mlir::Value getWeight() { return getOperand(1); }
   mlir::Value getBias() { return getOperand(2); }
   mlir::Value getOutput() { return getOperation()->getResult(0); }
+  mlir::FloatAttr getWeightScaleAttr() {
+    return (*this)->getAttrOfType<mlir::FloatAttr>(getWeightScaleAttrName());
+  }
+
+  mlir::LogicalResult verify();
+};
+
+class QLinearOp : public mlir::Op<QLinearOp, mlir::OpTrait::NOperands<3>::Impl,
+                                  mlir::OpTrait::OneResult> {
+public:
+  using Op::Op;
+
+  static llvm::StringRef getOperationName() { return "mini.qlinear"; }
+
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                    mlir::Type resultType, mlir::Value input,
+                    mlir::Value qweight, mlir::Value bias,
+                    mlir::FloatAttr weightScale);
+
+  static llvm::ArrayRef<llvm::StringRef> getAttributeNames();
+  static llvm::StringRef getWeightScaleAttrName() { return "weight_scale"; }
+
+  mlir::Value getInput() { return getOperand(0); }
+  mlir::Value getWeight() { return getOperand(1); }
+  mlir::Value getBias() { return getOperand(2); }
+  mlir::Value getOutput() { return getOperation()->getResult(0); }
+  mlir::FloatAttr getWeightScaleAttr() {
+    return (*this)->template getAttrOfType<mlir::FloatAttr>(
+        getWeightScaleAttrName());
+  }
+
+  mlir::LogicalResult verify();
 };
 
 class MatmulOp : public mlir::Op<MatmulOp, mlir::OpTrait::NOperands<2>::Impl,
@@ -113,11 +146,45 @@ public:
                     mlir::Value weight, mlir::Value bias);
 
   static llvm::ArrayRef<llvm::StringRef> getAttributeNames();
+  static llvm::StringRef getWeightScaleAttrName() { return "weight_scale"; }
 
   mlir::Value getInput() { return getOperand(0); }
   mlir::Value getWeight() { return getOperand(1); }
   mlir::Value getBias() { return getOperand(2); }
   mlir::Value getOutput() { return getOperation()->getResult(0); }
+  mlir::FloatAttr getWeightScaleAttr() {
+    return (*this)->getAttrOfType<mlir::FloatAttr>(getWeightScaleAttrName());
+  }
+
+  mlir::LogicalResult verify();
+};
+
+class QLinearReluOp
+    : public mlir::Op<QLinearReluOp, mlir::OpTrait::NOperands<3>::Impl,
+                      mlir::OpTrait::OneResult> {
+public:
+  using Op::Op;
+
+  static llvm::StringRef getOperationName() { return "mini.qlinear_relu"; }
+
+  static void build(mlir::OpBuilder &builder, mlir::OperationState &state,
+                    mlir::Type resultType, mlir::Value input,
+                    mlir::Value qweight, mlir::Value bias,
+                    mlir::FloatAttr weightScale);
+
+  static llvm::ArrayRef<llvm::StringRef> getAttributeNames();
+  static llvm::StringRef getWeightScaleAttrName() { return "weight_scale"; }
+
+  mlir::Value getInput() { return getOperand(0); }
+  mlir::Value getWeight() { return getOperand(1); }
+  mlir::Value getBias() { return getOperand(2); }
+  mlir::Value getOutput() { return getOperation()->getResult(0); }
+  mlir::FloatAttr getWeightScaleAttr() {
+    return (*this)->template getAttrOfType<mlir::FloatAttr>(
+        getWeightScaleAttrName());
+  }
+
+  mlir::LogicalResult verify();
 };
 
 class FusedMatmulAddReluOp

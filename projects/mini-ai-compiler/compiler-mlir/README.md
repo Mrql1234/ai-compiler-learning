@@ -26,6 +26,7 @@ It can now:
 - lower `mini.*` ops into `gpu.launch_func` / `gpu.module`
 - lower the GPU path further into NVVM binaries
 - JIT-run a small lowered GPU demo locally and return the computed result
+- run a first teaching-style weight-only INT8 quantization pass for `mini.linear` / `mini.fused_linear_relu`
 
 ## Configure
 
@@ -56,6 +57,27 @@ Lower mini ops to standard tensor/linalg dialects:
 ./build/bin/mini-compiler-opt --mini-lower-to-linalg test/lower_to_linalg.mlir
 ```
 
+Quantize supported constant linear weights to INT8 first:
+
+```bash
+./build/bin/mini-compiler-opt --mini-quantize-weights test/quantize_weights.mlir
+```
+
+Inspect the late-staged `mini.qlinear` form before the dedicated quantized GPU lowering:
+
+```bash
+./build/bin/mini-compiler-opt \
+  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion,mini-quantize-weights,mini-lower-to-linalg))' \
+  test/quantized_qlinear_late_stage.mlir
+```
+
+Prepare the quantized GPU path so dequantization is fused into the qlinear
+matmul-style `linalg.generic` body:
+
+```bash
+./build/bin/mini-compiler-opt --mini-quantized-gpu-prep test/quantized_lower_to_linalg.mlir
+```
+
 Continue one step further into bufferized IR:
 
 ```bash
@@ -69,25 +91,33 @@ Continue all the way to LLVM dialect on the CPU path:
 
 ```bash
 ./build/bin/mini-compiler-opt --mini-cpu-lowering test/cpu_pipeline.mlir
+./build/bin/mini-compiler-opt --mini-quantized-cpu-lowering test/quantized_lower_to_linalg.mlir
 ```
 
 Run a lowered MLIR module through the local CPU JIT runner:
 
 ```bash
 ./build/bin/mini-compiler-runner test/cpu_runner_demo.mlir --entry-point-result=f32
+./build/bin/mini-compiler-runner --quantized test/quantized_runner_demo.mlir --entry-point-result=f32
 ```
 
 Prepare `mini.*` programs for a later GPU/Triton route:
 
 ```bash
 ./build/bin/mini-compiler-opt --mini-gpu-prep test/gpu_prep.mlir
+./build/bin/mini-compiler-opt --mini-quantized-gpu-prep test/quantized_lower_to_linalg.mlir
 ```
 
 Lower further into GPU launch/module form without needing a local GPU:
 
 ```bash
 ./build/bin/mini-compiler-opt --mini-gpu-lowering test/gpu_prep.mlir
+./build/bin/mini-compiler-opt --mini-quantized-gpu-lowering test/quantized_gpu_lowering.mlir
 ```
+
+The quantized GPU lowering keeps the INT8 weight load inside the generated
+matmul kernel body, where the kernel performs `arith.sitofp`, multiplies by the
+weight scale, and accumulates into the output.
 
 Inspect the project-defined GPU loop mapping strategy on `scf.parallel`:
 
@@ -132,6 +162,7 @@ Run the local GPU JIT demo through the new compiler-mlir GPU runner:
 
 ```bash
 ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir
+./build/bin/mini-compiler-gpu-runner --quantized test/quantized_runner_demo.mlir
 ```
 
 Expected output:

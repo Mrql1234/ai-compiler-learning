@@ -11,6 +11,9 @@ std::unique_ptr<mlir::Pass> createMiniCanonicalizePass();
 std::unique_ptr<mlir::Pass> createMiniConstantFoldPass();
 std::unique_ptr<mlir::Pass> createMiniDCEPass();
 std::unique_ptr<mlir::Pass> createMiniFusionPass();
+std::unique_ptr<mlir::Pass> createMiniQuantizeWeightsPass();
+std::unique_ptr<mlir::Pass> createMiniLowerQuantToCpuRuntimePass();
+std::unique_ptr<mlir::Pass> createMiniLowerQLinearToLinalgPass();
 std::unique_ptr<mlir::Pass> createMiniLowerToLinalgPass();
 std::unique_ptr<mlir::Pass> createMiniGpuTilePass();
 std::unique_ptr<mlir::Pass>
@@ -19,6 +22,8 @@ std::unique_ptr<mlir::Pass> createMiniGpuMapPass();
 std::unique_ptr<mlir::Pass> createMiniGpuHostSharedPass();
 void registerMiniGpuPasses();
 void registerMiniGpuPassPipelines();
+void registerMiniQuantPasses();
+void registerMiniQuantPassPipelines();
 
 void registerMiniPasses();
 void registerMiniPassPipelines();

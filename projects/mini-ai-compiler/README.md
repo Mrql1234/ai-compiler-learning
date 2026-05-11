@@ -74,3 +74,22 @@ cmake -S . -B build \
   -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm
 cmake --build build
 ```
+
+Weight-only INT8 quantization entry points currently live in:
+
+- `projects/mini-ai-compiler/compiler-mlir/test/quantize_weights.mlir`
+- `projects/mini-ai-compiler/compiler-mlir/test/quantized_lower_to_linalg.mlir`
+- `projects/mini-ai-compiler/compiler-mlir/test/quantized_gpu_lowering.mlir`
+- `projects/mini-ai-compiler/compiler-mlir/test/quantized_qlinear_late_stage.mlir`
+
+Typical commands:
+
+```bash
+cd projects/mini-ai-compiler/compiler-mlir
+./build/bin/mini-compiler-opt --mini-quantize-weights test/quantize_weights.mlir
+./build/bin/mini-compiler-opt --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion,mini-quantize-weights,mini-lower-to-linalg))' test/quantized_qlinear_late_stage.mlir
+./build/bin/mini-compiler-opt --mini-quantized-gpu-prep test/quantized_lower_to_linalg.mlir
+./build/bin/mini-compiler-opt --mini-quantized-gpu-lowering test/quantized_gpu_lowering.mlir
+./build/bin/mini-compiler-opt --mini-quantized-cpu-lowering test/quantized_lower_to_linalg.mlir
+./build/bin/mini-compiler-gpu-runner --quantized test/quantized_runner_demo.mlir
+```

@@ -46,6 +46,7 @@ struct RunnerOptions {
   std::string inputFilename;
   std::string entryFunction = "run";
   std::string resultType = "f32";
+  bool quantized = false;
   std::string gpuChip = "sm_86";
   std::string cubinFormat = "fatbin";
   int optLevel = 3;
@@ -54,6 +55,7 @@ struct RunnerOptions {
 static void printUsage(llvm::raw_ostream &os, llvm::StringRef programName) {
   os << "Usage: " << programName
      << " <input.mlir> [-e function] [--entry-point-result=f32|void]"
+        " [--quantized]"
         " [--gpu-chip=sm_86] [--cubin-format=fatbin|isa] [--opt-level=0..3]\n";
 }
 
@@ -76,6 +78,10 @@ static bool parseOptions(int argc, char **argv, RunnerOptions &options,
     }
     if (arg.consume_front("--entry-point-result=")) {
       options.resultType = arg.str();
+      continue;
+    }
+    if (arg == "--quantized") {
+      options.quantized = true;
       continue;
     }
     if (arg.consume_front("--gpu-chip=")) {
@@ -131,7 +137,9 @@ static OwningOpRef<ModuleOp> loadModule(MLIRContext &context,
 static LogicalResult runMiniGpuLowering(ModuleOp module,
                                         const RunnerOptions &options) {
   PassManager pm(module.getContext());
-  if (failed(parsePassPipeline("mini-gpu-lowering", pm)))
+  if (failed(parsePassPipeline(
+          options.quantized ? "mini-quantized-gpu-lowering" : "mini-gpu-lowering",
+          pm)))
     return failure();
 
   std::string pipeline =

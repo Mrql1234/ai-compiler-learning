@@ -99,7 +99,8 @@ static FailureOr<Value> lowerLinearValue(Location loc, Value input, Value weight
   if (inputType->getRank() != 2 || weightType->getRank() != 2 ||
       biasType->getRank() != 1 || resultType.getRank() != 2)
     return failure();
-  if (!resultType.getElementType().isF32())
+  if (!inputType->getElementType().isF32() || !weightType->getElementType().isF32() ||
+      !biasType->getElementType().isF32() || !resultType.getElementType().isF32())
     return failure();
 
   auto zeroTensor = createEmptyTensorFor(loc, resultType, input, rewriter);
@@ -602,10 +603,12 @@ void registerMiniPasses() {
   PassRegistration<MiniDCEPass>();
   PassRegistration<MiniFusionPass>();
   PassRegistration<MiniLowerToLinalgPass>();
+  registerMiniQuantPasses();
   registerMiniGpuPasses();
 }
 
 void registerMiniPassPipelines() {
+  registerMiniQuantPassPipelines();
   registerMiniGpuPassPipelines();
 
   PassPipelineRegistration<>(

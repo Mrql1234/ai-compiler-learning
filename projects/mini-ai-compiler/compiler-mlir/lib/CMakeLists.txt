@@ -2,6 +2,7 @@ add_mlir_library(MiniCompilerMLIR
   MiniDialect.cpp
   GpuPasses.cpp
   Passes.cpp
+  QuantPasses.cpp
 
   DEPENDS
   MLIRIR
