@@ -26,6 +26,8 @@ It can now:
 - lower `mini.*` ops into `gpu.launch_func` / `gpu.module`
 - lower the GPU path further into NVVM binaries
 - JIT-run a small lowered GPU demo locally and return the computed result
+- collect repeatable GPU performance runs for compiler-generated, hand CUDA,
+  and third-party library kernel baselines
 - run a first teaching-style weight-only INT8 quantization pass for `mini.linear` / `mini.fused_linear_relu`
 
 ## Configure
@@ -48,6 +50,8 @@ Notes:
   - `LOWERING_ROADMAP.md`
 - Local dev + cloud A10 workflow:
   - `GPU_A10_WORKFLOW.md`
+- GPU performance monitoring plan:
+  - `PERF_MONITORING_PLAN.md`
 
 ## Useful Commands
 
@@ -171,6 +175,18 @@ Expected output:
 3.500000e+00
 ```
 
+Run the GPU runner with internal warmup/repeat timing, JSON output, and a
+lowered MLIR artifact:
+
+```bash
+./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
+  --warmup=10 \
+  --repeat=100 \
+  --json-output=perf/runs/gpu_runner_demo_mlir_nvvm.json \
+  --dump-lowered=perf/runs/gpu_runner_demo_lowered.mlir \
+  --cubin-format=fatbin
+```
+
 Preflight the cloud A10 NVVM toolchain:
 
 ```bash
@@ -215,6 +231,85 @@ If you only want a CPU baseline on a machine without a working NVPTX/CUDA path:
 
 ```bash
 python3 ./scripts/benchmark_compare.py test/gpu_runner_demo.mlir --skip-gpu
+```
+
+Run a local CPU-only smoke check of the performance harness using a dummy
+external backend:
+
+```bash
+python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
+  --backend cuda_hand \
+  --backend-command cuda_hand='printf 3.5' \
+  --warmup 1 \
+  --repeat 2 \
+  --run-dir /tmp/compiler-mlir-perf-smoke
+python3 ./scripts/perf_compare.py /tmp/compiler-mlir-perf-smoke/summary.json
+```
+
+Run the GPU performance harness for the first compiler-generated baseline on a
+CUDA-enabled cloud GPU machine:
+
+```bash
+python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
+  --warmup 10 \
+  --repeat 100
+```
+
+The performance harness entry files are:
+
+- `perf/cases/gpu_runner_demo.json`: shared case definition
+- `PERF_MONITORING_PLAN.md`: cloud GPU implementation and optimization plan
+- `scripts/perf_run.py`: runs selected backends and writes JSON results
+- `scripts/perf_compare.py`: compares an existing `summary.json`
+- `scripts/perf_profile_nsys.sh`: wraps any backend command with Nsight Systems
+- `scripts/perf_profile_ncu.sh`: wraps any backend command with Nsight Compute
+
+Compare a saved run:
+
+```bash
+python3 ./scripts/perf_compare.py perf/runs/<run-dir>/summary.json
+```
+
+Run the same case with an external hand CUDA backend command:
+
+```bash
+python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
+  --backend mlir_nvvm \
+  --backend cuda_hand \
+  --backend-command cuda_hand='./build/bin/mini-compiler-kernel-bench --backend cuda_hand --case perf/cases/gpu_runner_demo.json' \
+  --warmup 10 \
+  --repeat 100
+```
+
+Run the same case with an external CUTLASS/cuBLAS backend command:
+
+```bash
+python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
+  --backend mlir_nvvm \
+  --backend cutlass \
+  --backend-command cutlass='./build/bin/mini-compiler-kernel-bench --backend cutlass --case perf/cases/gpu_runner_demo.json' \
+  --warmup 10 \
+  --repeat 100
+```
+
+Profile the compiler-generated route with Nsight Systems:
+
+```bash
+./scripts/perf_profile_nsys.sh perf/runs/nsys_gpu_runner_demo \
+  ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
+    --warmup=10 \
+    --repeat=100 \
+    --cubin-format=fatbin
+```
+
+Profile the compiler-generated route with Nsight Compute:
+
+```bash
+./scripts/perf_profile_ncu.sh perf/runs/ncu_gpu_runner_demo \
+  ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
+    --warmup=5 \
+    --repeat=20 \
+    --cubin-format=fatbin
 ```
 
 Translate the LLVM dialect output into textual LLVM IR:

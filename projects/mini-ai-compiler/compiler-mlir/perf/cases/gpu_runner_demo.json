@@ -1,0 +1,33 @@
+{
+  "name": "gpu_runner_demo",
+  "description": "Small runnable GPU demo used as the first compiler-generated kernel perf case.",
+  "input": "test/gpu_runner_demo.mlir",
+  "entry_function": "run",
+  "result_type": "f32",
+  "tolerance": {
+    "abs": 1.0e-5,
+    "rel": 1.0e-5
+  },
+  "backends": [
+    {
+      "name": "mlir_nvvm",
+      "kind": "mlir_gpu_runner",
+      "enabled": true,
+      "gpu_chip": "sm_86",
+      "cubin_format": "fatbin",
+      "opt_level": 3
+    },
+    {
+      "name": "cuda_hand",
+      "kind": "external",
+      "enabled": false,
+      "notes": "Pass --backend cuda_hand --backend-command cuda_hand='<command>' once a hand CUDA benchmark binary is available."
+    },
+    {
+      "name": "cutlass",
+      "kind": "external",
+      "enabled": false,
+      "notes": "Pass --backend cutlass --backend-command cutlass='<command>' once a CUTLASS/cuBLAS benchmark binary is available."
+    }
+  ]
+}
