@@ -1,5 +1,6 @@
 add_library(MiniCudaRuntimeWrappers SHARED
   CudaRuntimeWrappers.cpp
+  MiniCudaKernelRuntime.cu
 )
 
 target_include_directories(MiniCudaRuntimeWrappers
@@ -11,6 +12,13 @@ target_include_directories(MiniCudaRuntimeWrappers
 target_link_libraries(MiniCudaRuntimeWrappers
   PRIVATE
   CUDA::cuda_driver
+  CUDA::cudart
+  CUDA::cublas
+)
+
+set_target_properties(MiniCudaRuntimeWrappers PROPERTIES
+  CUDA_SEPARABLE_COMPILATION OFF
+  CUDA_ARCHITECTURES "${MINI_CUDA_ARCHITECTURES}"
 )
 
 if(MINI_NVTX_LIBRARY)

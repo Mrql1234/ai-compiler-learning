@@ -22,6 +22,14 @@ def parse_args() -> argparse.Namespace:
         default="cublas",
         help="Backend used as the gap baseline when present",
     )
+    parser.add_argument(
+        "--metric",
+        default="kernel_ms",
+        help=(
+            "Metric used for comparison. Use kernel_ms for fair kernel timing, "
+            "invoke_ms for host invocation timing, or latency_ms for legacy v0 runs."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -32,9 +40,39 @@ def load_summary(path: Path) -> dict[str, Any]:
         return json.load(handle)
 
 
-def latency(result: dict[str, Any], key: str = "median") -> float | None:
-    value = result.get("latency_ms", {}).get(key)
+def metric_stats(result: dict[str, Any], metric: str) -> dict[str, Any] | None:
+    metrics = result.get("metrics", {})
+    if isinstance(metrics, dict):
+        value = metrics.get(metric)
+        if isinstance(value, dict):
+            return value
+    legacy = result.get(metric)
+    if isinstance(legacy, dict):
+        return legacy
+    return None
+
+
+def metric_value(result: dict[str, Any] | None, metric: str, key: str = "median") -> float | None:
+    if result is None:
+        return None
+    stats = metric_stats(result, metric)
+    if stats is None:
+        return None
+    value = stats.get(key)
     return float(value) if value is not None else None
+
+
+def available_metric_names(results: list[dict[str, Any]]) -> list[str]:
+    names: set[str] = set()
+    for result in results:
+        metrics = result.get("metrics", {})
+        if isinstance(metrics, dict):
+            for name, value in metrics.items():
+                if isinstance(value, dict):
+                    names.add(name)
+        if isinstance(result.get("latency_ms"), dict):
+            names.add("latency_ms")
+    return sorted(names)
 
 
 def main() -> int:
@@ -44,30 +82,45 @@ def main() -> int:
     if not results:
         raise SystemExit("No results found")
 
+    timed_results = [
+        result for result in results if metric_value(result, args.metric) is not None
+    ]
+    if not timed_results:
+        available_metrics = available_metric_names(results)
+        suffix = (
+            f" Available metrics: {', '.join(available_metrics)}"
+            if available_metrics
+            else ""
+        )
+        raise SystemExit(
+            f"No timed results found for metric '{args.metric}'.{suffix}"
+        )
+
     baseline_result = next(
         (result for result in results if result.get("backend") == args.baseline),
         None,
     )
-    baseline_latency = latency(baseline_result) if baseline_result else None
+    baseline_latency = metric_value(baseline_result, args.metric)
     if baseline_latency is None:
-        successful = [result for result in results if latency(result) is not None]
-        if not successful:
-            raise SystemExit("No successful timed results found")
-        baseline_result = min(successful, key=lambda result: latency(result) or float("inf"))
-        baseline_latency = latency(baseline_result)
+        baseline_result = min(
+            timed_results,
+            key=lambda result: metric_value(result, args.metric) or float("inf"),
+        )
+        baseline_latency = metric_value(baseline_result, args.metric)
 
     case_name = summary.get("case", {}).get("name", "<unknown>")
     baseline_name = baseline_result.get("backend") if baseline_result else "<none>"
     print(f"case: {case_name}")
+    print(f"metric: {args.metric}")
     print(f"baseline: {baseline_name}")
     print("backend        correct   median ms   mean ms    gap")
     print("-------------  --------  ----------  --------  ------")
     for result in results:
-        median_ms = latency(result, "median")
-        mean_ms = latency(result, "mean")
+        median_ms = metric_value(result, args.metric, "median")
+        mean_ms = metric_value(result, args.metric, "mean")
         correct = result.get("correct")
         correct_text = "-" if correct is None else ("yes" if correct else "no")
-        median_text = "-" if median_ms is None else f"{median_ms:.3f}"
+        median_text = "metric_missing" if median_ms is None else f"{median_ms:.3f}"
         mean_text = "-" if mean_ms is None else f"{mean_ms:.3f}"
         if median_ms is None or baseline_latency in (None, 0.0):
             gap_text = "-"

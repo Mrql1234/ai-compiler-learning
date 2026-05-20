@@ -30,6 +30,7 @@ class BackendResult:
     stderr: str
     result: float | None
     timings_ms: list[float]
+    metrics: dict[str, Any]
     json_path: Path
     artifacts: dict[str, Any]
     correct: bool | None = None
@@ -50,6 +51,13 @@ class BackendResult:
         if key == "median":
             return statistics.median(self.timings_ms)
         raise ValueError(f"unknown latency key: {key}")
+
+    def metric(self, metric_name: str, key: str) -> float | None:
+        metric = self.metrics.get(metric_name)
+        if not isinstance(metric, dict):
+            return None
+        value = metric.get(key)
+        return float(value) if value is not None else None
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,6 +101,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--repeat", type=int, default=100)
+    parser.add_argument(
+        "--metric",
+        default="kernel_ms",
+        help="Metric shown in the final table; use latency_ms for legacy v0 runs",
+    )
     parser.add_argument(
         "--ptxas-cmd-options",
         default="",
@@ -162,12 +175,62 @@ def extract_float(stdout: str) -> float | None:
         return None
 
 
-def load_runner_json(path: Path) -> tuple[float | None, list[float], dict[str, Any]]:
+def summarize_timings(timings_ms: list[float], source: str) -> dict[str, Any]:
+    return {
+        "source": source,
+        "min": min(timings_ms) if timings_ms else None,
+        "mean": statistics.fmean(timings_ms) if timings_ms else None,
+        "median": statistics.median(timings_ms) if timings_ms else None,
+        "max": max(timings_ms) if timings_ms else None,
+        "timings_ms": timings_ms,
+    }
+
+
+def load_runner_json(
+    path: Path,
+) -> tuple[float | None, list[float], dict[str, Any], dict[str, Any]]:
     with path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     result = payload.get("result")
+    metrics = payload.get("metrics", {})
+    if not isinstance(metrics, dict):
+        metrics = {}
     timings = [float(value) for value in payload.get("timings_ms", [])]
-    return (float(result) if result is not None else None, timings, payload)
+    if not timings:
+        invoke_metric = metrics.get("invoke_ms")
+        if isinstance(invoke_metric, dict):
+            timings = [float(value) for value in invoke_metric.get("timings_ms", [])]
+        legacy_latency = payload.get("latency_ms")
+        if not timings and isinstance(legacy_latency, dict):
+            timings = [
+                float(value) for value in legacy_latency.get("timings_ms", [])
+            ]
+    return (float(result) if result is not None else None, timings, metrics, payload)
+
+
+def metric_from_payload(
+    metrics: dict[str, Any],
+    timings_ms: list[float],
+    metric_name: str,
+    key: str,
+) -> float | None:
+    if metric_name == "latency_ms":
+        if not timings_ms:
+            return None
+        if key == "min":
+            return min(timings_ms)
+        if key == "max":
+            return max(timings_ms)
+        if key == "mean":
+            return statistics.fmean(timings_ms)
+        if key == "median":
+            return statistics.median(timings_ms)
+        raise ValueError(f"unknown latency key: {key}")
+    metric = metrics.get(metric_name)
+    if not isinstance(metric, dict):
+        return None
+    value = metric.get(key)
+    return float(value) if value is not None else None
 
 
 def write_backend_json(result: BackendResult) -> None:
@@ -187,6 +250,7 @@ def write_backend_json(result: BackendResult) -> None:
             "max": result.latency("max"),
         },
         "timings_ms": result.timings_ms,
+        "metrics": result.metrics,
         "artifacts": result.artifacts,
     }
     with result.json_path.open("w", encoding="utf-8") as handle:
@@ -210,6 +274,7 @@ def run_mlir_backend(
         "-e",
         backend.get("entry_function", case.get("entry_function", "run")),
         f"--entry-point-result={backend.get('result_type', case.get('result_type', 'f32'))}",
+        f"--kernel-backend={backend.get('kernel_backend', backend_name)}",
         f"--gpu-chip={backend.get('gpu_chip', 'sm_86')}",
         f"--cubin-format={backend.get('cubin_format', 'fatbin')}",
         f"--opt-level={backend.get('opt_level', 3)}",
@@ -233,9 +298,10 @@ def run_mlir_backend(
     )
     result_value: float | None = extract_float(completed.stdout)
     timings_ms: list[float] = []
+    metrics: dict[str, Any] = {}
     artifacts: dict[str, Any] = {"lowered_mlir": str(lowered_path)}
     if completed.returncode == 0 and json_path.exists():
-        result_value, timings_ms, runner_payload = load_runner_json(json_path)
+        result_value, timings_ms, metrics, runner_payload = load_runner_json(json_path)
         artifacts.update(runner_payload.get("artifacts", {}))
     backend_result = BackendResult(
         name=backend_name,
@@ -246,6 +312,7 @@ def run_mlir_backend(
         stderr=completed.stderr,
         result=result_value,
         timings_ms=timings_ms,
+        metrics=metrics,
         json_path=json_path,
         artifacts=artifacts,
     )
@@ -285,6 +352,7 @@ def run_external_backend(
     command, uses_template = substitute_command_templates(command, replacements)
 
     timings_ms: list[float] = []
+    metrics: dict[str, Any] = {}
     last_completed: subprocess.CompletedProcess[str] | None = None
     result_value: float | None = None
     artifacts: dict[str, Any] = {}
@@ -299,11 +367,12 @@ def run_external_backend(
         )
         duration_ms = (time.perf_counter() - start) * 1000.0
         if last_completed.returncode == 0 and json_path.exists():
-            result_value, timings_ms, runner_payload = load_runner_json(json_path)
+            result_value, timings_ms, metrics, runner_payload = load_runner_json(json_path)
             artifacts.update(runner_payload.get("artifacts", {}))
         elif last_completed.returncode == 0:
             result_value = extract_float(last_completed.stdout)
             timings_ms.append(duration_ms)
+            metrics["invoke_ms"] = summarize_timings(timings_ms, "host_process_wall")
     else:
         total_runs = args.warmup + args.repeat
         for iteration in range(total_runs):
@@ -323,6 +392,7 @@ def run_external_backend(
                 timings_ms.append(duration_ms)
         assert last_completed is not None
         result_value = extract_float(last_completed.stdout)
+        metrics["invoke_ms"] = summarize_timings(timings_ms, "host_process_wall")
 
     assert last_completed is not None
     backend_result = BackendResult(
@@ -334,6 +404,7 @@ def run_external_backend(
         stderr=last_completed.stderr,
         result=result_value,
         timings_ms=timings_ms,
+        metrics=metrics,
         json_path=json_path,
         artifacts=artifacts,
     )
@@ -389,6 +460,7 @@ def write_summary(case: dict[str, Any], run_dir: Path, results: list[BackendResu
                     "median": result.latency("median"),
                     "max": result.latency("max"),
                 },
+                "metrics": result.metrics,
                 "json_path": str(result.json_path),
                 "artifacts": result.artifacts,
             }
@@ -401,20 +473,25 @@ def write_summary(case: dict[str, Any], run_dir: Path, results: list[BackendResu
     return summary_path
 
 
-def print_table(results: list[BackendResult]) -> None:
-    print("backend        status   correct   result        median ms   mean ms")
-    print("-------------  -------  --------  ------------  ----------  --------")
+def print_table(results: list[BackendResult], metric_name: str) -> None:
+    print(f"metric: {metric_name}")
+    print("backend        status   correct   result        median ms       mean ms")
+    print("-------------  -------  --------  ------------  --------------  --------")
     for result in results:
         status = "ok" if result.succeeded else f"fail:{result.returncode}"
         correct = "-" if result.correct is None else ("yes" if result.correct else "no")
         value = "-" if result.result is None else f"{result.result:.9g}"
-        median_ms = result.latency("median")
-        mean_ms = result.latency("mean")
-        median_text = "-" if median_ms is None else f"{median_ms:.3f}"
+        median_ms = metric_from_payload(
+            result.metrics, result.timings_ms, metric_name, "median"
+        )
+        mean_ms = metric_from_payload(
+            result.metrics, result.timings_ms, metric_name, "mean"
+        )
+        median_text = "metric_missing" if median_ms is None else f"{median_ms:.3f}"
         mean_text = "-" if mean_ms is None else f"{mean_ms:.3f}"
         print(
             f"{result.name:<13}  {status:<7}  {correct:<8}  "
-            f"{value:<12}  {median_text:>10}  {mean_text:>8}"
+            f"{value:<12}  {median_text:>14}  {mean_text:>8}"
         )
 
 
@@ -442,7 +519,7 @@ def main() -> int:
 
     apply_correctness(case, results)
     summary_path = write_summary(case, run_dir, results)
-    print_table(results)
+    print_table(results, args.metric)
     print(f"\nsummary: {summary_path}")
     return 0 if all(result.succeeded and result.correct is not False for result in results) else 1
 

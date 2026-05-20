@@ -20,11 +20,16 @@ config.excludes = ["Inputs", "CMakeLists.txt", "cpu_runner_demo.mlir", "lit.cfg.
 config.substitutions.append(
     ("%mini_compiler_opt", os.path.join(config.mini_compiler_obj_root, "bin", "mini-compiler-opt"))
 )
+config.substitutions.append(
+    ("%mini_compiler_gpu_runner", os.path.join(config.mini_compiler_obj_root, "bin", "mini-compiler-gpu-runner"))
+)
 
 tool_dirs = [os.path.join(config.mini_compiler_obj_root, "bin"), config.llvm_tools_dir]
 tools = [
     "FileCheck",
     "mini-compiler-opt",
+    "mini-compiler-gpu-runner",
+    "not",
 ]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)

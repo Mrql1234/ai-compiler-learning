@@ -164,23 +164,33 @@ static float copyFirstResult(DeviceBuffers &buffers, cudaStream_t stream) {
 }
 
 template <typename LaunchFn>
-static std::vector<double> timeRepeated(int warmup, int repeat,
-                                        cudaStream_t stream,
-                                        LaunchFn launch) {
-  std::vector<double> timings;
-  timings.reserve(static_cast<size_t>(repeat));
+static void timeRepeated(int warmup, int repeat, cudaStream_t stream,
+                         LaunchFn launch, BenchResult &result) {
+  result.invokeTimingsMs.reserve(static_cast<size_t>(repeat));
+  result.kernelTimingsMs.reserve(static_cast<size_t>(repeat));
+  cudaEvent_t startEvent = nullptr;
+  cudaEvent_t stopEvent = nullptr;
+  CHECK_CUDA(cudaEventCreate(&startEvent));
+  CHECK_CUDA(cudaEventCreate(&stopEvent));
   for (int iteration = 0; iteration < warmup + repeat; ++iteration) {
     auto start = std::chrono::steady_clock::now();
+    CHECK_CUDA(cudaEventRecord(startEvent, stream));
     launch();
     CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaStreamSynchronize(stream));
+    CHECK_CUDA(cudaEventRecord(stopEvent, stream));
+    CHECK_CUDA(cudaEventSynchronize(stopEvent));
     auto end = std::chrono::steady_clock::now();
     if (iteration >= warmup) {
+      float kernelMs = 0.0f;
+      CHECK_CUDA(cudaEventElapsedTime(&kernelMs, startEvent, stopEvent));
       std::chrono::duration<double, std::milli> elapsed = end - start;
-      timings.push_back(elapsed.count());
+      result.invokeTimingsMs.push_back(elapsed.count());
+      result.kernelTimingsMs.push_back(static_cast<double>(kernelMs));
     }
   }
-  return timings;
+  CHECK_CUDA(cudaEventDestroy(startEvent));
+  CHECK_CUDA(cudaEventDestroy(stopEvent));
+  result.timingsMs = result.invokeTimingsMs;
 }
 
 } // namespace
@@ -199,23 +209,23 @@ BenchResult runCudaHandBenchmark(const BenchProblem &problem, int warmup,
   dim3 block(16, 16);
   dim3 grid((static_cast<unsigned>(problem.n) + block.x - 1) / block.x,
             (static_cast<unsigned>(problem.m) + block.y - 1) / block.y);
-  auto timings = timeRepeated(warmup, repeat, stream, [&] {
+  BenchResult benchResult;
+  benchResult.backend = "cuda_hand";
+  benchResult.implementation = "single CUDA linear+relu kernel";
+
+  timeRepeated(warmup, repeat, stream, [&] {
     NvtxRange launchRange("cuda_hand_linear_relu");
     linearReluKernel<<<grid, block, 0, stream>>>(
         buffers.input, buffers.weight, buffers.bias, buffers.output,
         static_cast<int>(problem.m), static_cast<int>(problem.n),
         static_cast<int>(problem.k));
-  });
+  }, benchResult);
 
   float result = copyFirstResult(buffers, stream);
   freeBuffers(buffers);
   CHECK_CUDA(cudaStreamDestroy(stream));
 
-  BenchResult benchResult;
-  benchResult.backend = "cuda_hand";
-  benchResult.implementation = "single CUDA linear+relu kernel";
   benchResult.result = result;
-  benchResult.timingsMs = std::move(timings);
   return benchResult;
 }
 
@@ -242,7 +252,11 @@ BenchResult runCublasBenchmark(const BenchProblem &problem, int warmup,
   int block = 256;
   int grid = (total + block - 1) / block;
 
-  auto timings = timeRepeated(warmup, repeat, stream, [&] {
+  BenchResult benchResult;
+  benchResult.backend = "cublas";
+  benchResult.implementation = "cuBLAS SGEMM + CUDA bias/relu kernel";
+
+  timeRepeated(warmup, repeat, stream, [&] {
     NvtxRange launchRange("cublas_sgemm_bias_relu");
     // Row-major C[M,N] is column-major C^T[N,M]. With row-major A[M,K]
     // and W[N,K], use column-major views A_col[K,M] and W_col[K,N].
@@ -251,17 +265,13 @@ BenchResult runCublasBenchmark(const BenchProblem &problem, int warmup,
                              &beta, buffers.output, n));
     biasReluKernel<<<grid, block, 0, stream>>>(buffers.output, buffers.bias, m,
                                                n);
-  });
+  }, benchResult);
 
   float result = copyFirstResult(buffers, stream);
   freeBuffers(buffers);
   CHECK_CUBLAS(cublasDestroy(handle));
   CHECK_CUDA(cudaStreamDestroy(stream));
 
-  BenchResult benchResult;
-  benchResult.backend = "cublas";
-  benchResult.implementation = "cuBLAS SGEMM + CUDA bias/relu kernel";
   benchResult.result = result;
-  benchResult.timingsMs = std::move(timings);
   return benchResult;
 }

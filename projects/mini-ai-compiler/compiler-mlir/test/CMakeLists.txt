@@ -8,6 +8,7 @@ configure_lit_site_cfg(
 set(MINI_COMPILER_MLIR_TEST_DEPENDS
   FileCheck
   mini-compiler-opt
+  mini-compiler-gpu-runner
 )
 
 add_lit_testsuite(check-mini-compiler-mlir "Running mini compiler MLIR tests"

@@ -16,6 +16,8 @@ struct BenchResult {
   std::string backend;
   std::string implementation;
   float result = 0.0f;
+  std::vector<double> invokeTimingsMs;
+  std::vector<double> kernelTimingsMs;
   std::vector<double> timingsMs;
 };
 

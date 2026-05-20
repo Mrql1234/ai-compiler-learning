@@ -212,6 +212,26 @@ static void writeJsonString(llvm::raw_ostream &os, llvm::StringRef value) {
   os << "\"";
 }
 
+static void writeMetricObject(llvm::raw_ostream &os, llvm::StringRef source,
+                              const std::vector<double> &values) {
+  os << "{\n";
+  os << "      \"source\": ";
+  writeJsonString(os, source);
+  os << ",\n";
+  os << "      \"min\": " << latencyMin(values) << ",\n";
+  os << "      \"mean\": " << latencyMean(values) << ",\n";
+  os << "      \"median\": " << latencyMedian(values) << ",\n";
+  os << "      \"max\": " << latencyMax(values) << ",\n";
+  os << "      \"timings_ms\": [";
+  for (size_t i = 0, e = values.size(); i < e; ++i) {
+    if (i != 0)
+      os << ", ";
+    os << values[i];
+  }
+  os << "]\n";
+  os << "    }";
+}
+
 static void writeJsonReport(const Options &options, const BenchProblem &problem,
                             const BenchResult &result) {
   if (options.jsonOutput.empty())
@@ -258,8 +278,23 @@ static void writeJsonReport(const Options &options, const BenchProblem &problem,
     os << result.timingsMs[i];
   }
   os << "],\n";
+  os << "  \"metrics\": {\n";
+  os << "    \"kernel_ms\": ";
+  writeMetricObject(os, "cuda_event", result.kernelTimingsMs);
+  os << ",\n";
+  os << "    \"invoke_ms\": ";
+  writeMetricObject(os, "host_steady_clock_launch_to_event_sync",
+                    result.invokeTimingsMs);
+  os << "\n";
+  os << "  },\n";
+  os << "  \"measurement_contract\": {\n";
+  os << "    \"default_compare_metric\": \"kernel_ms\",\n";
+  os << "    \"excluded_from_kernel_ms\": [";
+  os << "\"allocation\", \"h2d\", \"d2h\", \"correctness\"";
+  os << "]\n";
+  os << "  },\n";
   os << "  \"artifacts\": {\n";
-  os << "    \"timing_mode\": \"host_wall_launch_to_sync\"\n";
+  os << "    \"timing_mode\": \"cuda_event_kernel_ms_and_host_invoke_ms\"\n";
   os << "  }\n";
   os << "}\n";
 }

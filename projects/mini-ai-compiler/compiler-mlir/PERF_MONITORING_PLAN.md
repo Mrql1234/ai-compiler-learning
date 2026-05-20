@@ -61,21 +61,18 @@ flowchart TD
 ```bash
 ./build/bin/mini-compiler-gpu-runner test/linear_relu.mlir \
   --kernel-backend=generated_nvvm \
-  --measure-kernel-events \
   --warmup=10 \
   --repeat=50 \
   --json-output=perf/runs/linear_relu_generated_nvvm.json
 
 ./build/bin/mini-compiler-gpu-runner test/linear_relu.mlir \
   --kernel-backend=cuda_hand \
-  --measure-kernel-events \
   --warmup=10 \
   --repeat=50 \
   --json-output=perf/runs/linear_relu_cuda_hand_integrated.json
 
 ./build/bin/mini-compiler-gpu-runner test/linear_relu.mlir \
   --kernel-backend=cublas \
-  --measure-kernel-events \
   --warmup=10 \
   --repeat=50 \
   --json-output=perf/runs/linear_relu_cublas_integrated.json
@@ -95,7 +92,7 @@ python3 ./scripts/perf_run.py perf/cases/linear_relu_f32_m1024_n1024_k1024.json 
   --run-dir perf/runs/linear_relu_integrated_a10
 ```
 
-上面命令是目标形态；当前仓库仍处于 `mlir_nvvm` 走 `mini-compiler-gpu-runner`，`cuda_hand` / `cublas` 走 `mini-compiler-kernel-bench` 的 v0 形态。
+上面命令中 `generated_nvvm` 当前已经走 `mini-compiler-gpu-runner`，并通过 CUDA runtime perf hooks 输出 `metrics.kernel_ms`。`cuda_hand` / `cublas` / `cutlass` 已作为 `--kernel-backend` 稳定接口预留，但编译器集成 runtime-call lowering 还未实现；当前仍应通过 `mini-compiler-kernel-bench` 作为外部微基线运行。
 
 ## 输入、输出与分叉点
 
@@ -318,6 +315,9 @@ PTX、cubin、fatbin 与 profiling 的关系：
 - `scripts/perf_profile_ncu.sh`
   - Nsight Compute 包装脚本
   - 用于查看 kernel 级 occupancy、memory throughput、stall reason 等指标
+- `scripts/perf_validate_cloud.sh`
+  - 云 GPU 上的一键验证入口
+  - 负责 CMake configure/build、运行 `gpu_runner_demo` 三 backend、按 `kernel_ms` 写 `compare_kernel_ms.txt`
 - `tools/mini-compiler-gpu-runner.cpp`
   - `mlir_nvvm` backend 主入口
 - `tools/mini-compiler-kernel-bench.cpp`
@@ -357,10 +357,17 @@ cmake --build build -j2
 运行小型 demo 的三 backend 对比：
 
 ```bash
+./scripts/perf_validate_cloud.sh
+```
+
+等价的手动命令：
+
+```bash
 python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
   --backend mlir_nvvm \
   --backend cuda_hand \
   --backend cublas \
+  --metric kernel_ms \
   --warmup 10 \
   --repeat 50 \
   --run-dir perf/runs/gpu_runner_demo_a10_20260511
@@ -370,6 +377,7 @@ python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
 
 ```bash
 python3 ./scripts/perf_compare.py \
+  --metric latency_ms \
   perf/runs/gpu_runner_demo_a10_20260511/summary.json
 ```
 
@@ -378,6 +386,7 @@ python3 ./scripts/perf_compare.py \
 ```bash
 python3 ./scripts/perf_run.py \
   perf/cases/linear_relu_f32_m1024_n1024_k1024.json \
+  --metric kernel_ms \
   --warmup 10 \
   --repeat 50 \
   --run-dir perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511
@@ -387,6 +396,7 @@ python3 ./scripts/perf_run.py \
 
 ```bash
 python3 ./scripts/perf_compare.py \
+  --metric latency_ms \
   perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json
 ```
 
@@ -510,13 +520,20 @@ Nsight Compute 的手写 CUDA demo 结论是：小型 demo grid 过小，无法�
 
 ### Phase 1：对齐指标口径
 
-- 在 `mini-compiler-kernel-bench` 中增加 CUDA event timing，输出 `metrics.kernel_ms`，保留现有 `latency_ms` 作为 `invoke_ms` 或兼容字段。
-- 在 `mini-compiler-gpu-runner` 中增加 `compile_ms`、`engine_create_ms`、`invoke_ms`、`end_to_end_ms` 拆分，避免把 lowering / JIT 时间误读为 kernel 时间。
-- 在 `perf_compare.py` 中增加 `--metric`，目标默认使用 `kernel_ms`；如果缺失则显式提示当前结果不是公平 kernel 对比。
+- 已在 `mini-compiler-kernel-bench` 中增加 CUDA event timing，输出 `metrics.kernel_ms`，并保留 host 侧 `metrics.invoke_ms` 与兼容字段 `latency_ms`。
+- 已在 `mini-compiler-gpu-runner` 中增加 `compile_ms`、`engine_create_ms`、`invoke_ms`、`end_to_end_ms` 拆分，避免把 lowering / JIT 时间误读为 kernel 时间。
+- 已在 `CudaRuntimeWrappers.cpp` 的 `mgpuLaunchKernel` 中增加 CUDA driver event timing，并通过 runtime perf hooks 回传给 `mini-compiler-gpu-runner`，用于生成 `mlir_nvvm` 的 `metrics.kernel_ms`。
+- 已在 `perf_compare.py` 中增加 `--metric`，默认使用 `kernel_ms`；如果缺失则显式提示当前结果不是公平 kernel 对比。
+- 本地 CPU-only 环境没有 CUDA runtime wrapper，因此 `mlir_nvvm` 的 `kernel_ms` 需要在云 GPU 上最终验证。
 
 ### Phase 2：把手写 CUDA 接进编译器路线
 
-- 新增 backend selection 机制，例如 `--kernel-backend=generated_nvvm|cuda_hand|cublas|cutlass`。
+- 已新增 runner 级 backend selection 接口：`--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass`。当前 `generated_nvvm` / `mlir_nvvm` 可执行，`cuda_hand` / `cublas` / `cutlass` 会返回明确的未实现错误，作为后续 compiler-integrated runtime-call lowering 的稳定入口。
+- 已新增 CUDA runtime ABI 实现目标：
+  - `runtime/MiniCudaKernelRuntime.cu`
+  - `mini_cuda_linear_relu_f32`
+  - `mini_cublas_linear_relu_f32`
+  - 两个 ABI 都会把 CUDA event 计时写入 `CudaRuntimeWrappers.cpp` 的 perf accumulator，供 `mini-compiler-gpu-runner` 汇总 `metrics.kernel_ms`。
 - 为 `mini.fused_linear_relu` 增加 `cuda_hand` lowering，生成对 `mini_cuda_linear_relu_f32` 的 runtime call。
 - 在 runtime 中复用 `KernelBenchCuda.cu` 的手写 kernel 实现，但输入输出来自编译器准备的 device memref。
 - 用同一个 runner 输出 `generated_nvvm` 和 `cuda_hand` 的 `kernel_ms`、`invoke_ms`、correctness。

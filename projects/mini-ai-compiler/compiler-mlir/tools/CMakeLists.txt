@@ -75,6 +75,7 @@ target_link_libraries(mini-compiler-gpu-runner
   MLIRSupport
   MLIRTargetLLVMIRExport
   MLIRToLLVMIRTranslationRegistration
+  ${CMAKE_DL_LIBS}
 )
 
 target_compile_definitions(mini-compiler-gpu-runner

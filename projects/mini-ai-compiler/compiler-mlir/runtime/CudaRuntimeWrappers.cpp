@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 
 #include "cuda.h"
 #ifdef MINI_ENABLE_NVTX
@@ -44,6 +45,7 @@ public:
   }(expr)
 
 thread_local static int32_t defaultDevice = 0;
+thread_local static std::vector<double> kernelTimingsMs;
 
 static CUdevice getDefaultCuDevice() {
   CUdevice device = 0;
@@ -68,6 +70,26 @@ public:
 
 extern "C" MINI_CUDA_WRAPPERS_EXPORT void mgpuSetDefaultDevice(int32_t device) {
   defaultDevice = device;
+}
+
+extern "C" MINI_CUDA_WRAPPERS_EXPORT void miniPerfResetKernelTimings() {
+  kernelTimingsMs.clear();
+}
+
+extern "C" MINI_CUDA_WRAPPERS_EXPORT int64_t miniPerfGetKernelTimingCount() {
+  return static_cast<int64_t>(kernelTimingsMs.size());
+}
+
+extern "C" MINI_CUDA_WRAPPERS_EXPORT double
+miniPerfGetKernelTimingMs(int64_t index) {
+  if (index < 0 || static_cast<size_t>(index) >= kernelTimingsMs.size())
+    return 0.0;
+  return kernelTimingsMs[static_cast<size_t>(index)];
+}
+
+extern "C" MINI_CUDA_WRAPPERS_EXPORT void
+miniPerfAppendKernelTimingMs(double timingMs) {
+  kernelTimingsMs.push_back(timingMs);
 }
 
 extern "C" MINI_CUDA_WRAPPERS_EXPORT CUmodule mgpuModuleLoad(void *data,
@@ -194,6 +216,10 @@ mgpuLaunchKernel(CUfunction function, intptr_t gridX, intptr_t gridY,
                  void **extra, size_t) {
   NvtxRange range("kernel_launch");
   ScopedContext scopedContext;
+  CUevent startEvent = nullptr;
+  CUevent stopEvent = nullptr;
+  CUDA_REPORT_IF_ERROR(cuEventCreate(&startEvent, CU_EVENT_DEFAULT));
+  CUDA_REPORT_IF_ERROR(cuEventCreate(&stopEvent, CU_EVENT_DEFAULT));
   if (smem > 0) {
     int32_t maxShmem = 0;
     CUdevice device = getDefaultCuDevice();
@@ -205,11 +231,19 @@ mgpuLaunchKernel(CUfunction function, intptr_t gridX, intptr_t gridY,
               smem, maxShmem);
     }
     CUDA_REPORT_IF_ERROR(cuFuncSetAttribute(
-        function, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem));
+      function, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem));
   }
+  CUDA_REPORT_IF_ERROR(cuEventRecord(startEvent, stream));
   CUDA_REPORT_IF_ERROR(cuLaunchKernel(function, gridX, gridY, gridZ, blockX,
                                       blockY, blockZ, smem, stream, params,
                                       extra));
+  CUDA_REPORT_IF_ERROR(cuEventRecord(stopEvent, stream));
+  CUDA_REPORT_IF_ERROR(cuEventSynchronize(stopEvent));
+  float elapsedMs = 0.0f;
+  CUDA_REPORT_IF_ERROR(cuEventElapsedTime(&elapsedMs, startEvent, stopEvent));
+  kernelTimingsMs.push_back(static_cast<double>(elapsedMs));
+  CUDA_REPORT_IF_ERROR(cuEventDestroy(startEvent));
+  CUDA_REPORT_IF_ERROR(cuEventDestroy(stopEvent));
 }
 
 extern "C" MINI_CUDA_WRAPPERS_EXPORT void

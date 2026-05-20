@@ -27,9 +27,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <numeric>
 #include <string>
 #include <vector>
+
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
 
 #ifdef MINI_ENABLE_NVTX
 #include "nvtx3/nvToolsExt.h"
@@ -67,10 +72,63 @@ public:
   }
 };
 
+class PerfRuntimeHooks {
+public:
+  struct KernelTimingSequence {
+    int64_t count = 0;
+    double totalMs = 0.0;
+  };
+
+  explicit PerfRuntimeHooks(const char *runtimePath) {
+#ifndef _WIN32
+    if (!runtimePath || runtimePath[0] == '\0')
+      return;
+    handle = dlopen(runtimePath, RTLD_LAZY | RTLD_LOCAL);
+    if (!handle)
+      return;
+    resetFn = reinterpret_cast<ResetFn>(dlsym(handle, "miniPerfResetKernelTimings"));
+    countFn = reinterpret_cast<CountFn>(dlsym(handle, "miniPerfGetKernelTimingCount"));
+    getFn = reinterpret_cast<GetFn>(dlsym(handle, "miniPerfGetKernelTimingMs"));
+#else
+    (void)runtimePath;
+#endif
+  }
+
+  bool available() const { return resetFn && countFn && getFn; }
+
+  void reset() const {
+    if (available())
+      resetFn();
+  }
+
+  KernelTimingSequence collectSequence() const {
+    KernelTimingSequence sequence;
+    if (!available())
+      return sequence;
+    sequence.count = countFn();
+    for (int64_t index = 0; index < sequence.count; ++index)
+      sequence.totalMs += getFn(index);
+    return sequence;
+  }
+
+private:
+  using ResetFn = void (*)();
+  using CountFn = int64_t (*)();
+  using GetFn = double (*)(int64_t);
+
+#ifndef _WIN32
+  void *handle = nullptr;
+#endif
+  ResetFn resetFn = nullptr;
+  CountFn countFn = nullptr;
+  GetFn getFn = nullptr;
+};
+
 struct RunnerOptions {
   std::string inputFilename;
   std::string entryFunction = "run";
   std::string resultType = "f32";
+  std::string kernelBackend = "generated_nvvm";
   bool quantized = false;
   std::string gpuChip = "sm_86";
   std::string cubinFormat = "fatbin";
@@ -86,6 +144,7 @@ static void printUsage(llvm::raw_ostream &os, llvm::StringRef programName) {
   os << "Usage: " << programName
      << " <input.mlir> [-e function] [--entry-point-result=f32|void]"
         " [--quantized]"
+        " [--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass]"
         " [--gpu-chip=sm_86] [--cubin-format=fatbin|isa]"
         " [--ptxas-cmd-options=...] [--opt-level=0..3]"
         " [--warmup=N] [--repeat=N] [--json-output=path]"
@@ -123,6 +182,10 @@ static bool parseOptions(int argc, char **argv, RunnerOptions &options,
     }
     if (arg.consume_front("--entry-point-result=")) {
       options.resultType = arg.str();
+      continue;
+    }
+    if (arg.consume_front("--kernel-backend=")) {
+      options.kernelBackend = arg.str();
       continue;
     }
     if (arg == "--quantized") {
@@ -188,7 +251,29 @@ static bool parseOptions(int argc, char **argv, RunnerOptions &options,
     printUsage(llvm::errs(), argv[0]);
     return false;
   }
+  if (options.kernelBackend != "generated_nvvm" &&
+      options.kernelBackend != "mlir_nvvm" &&
+      options.kernelBackend != "cuda_hand" &&
+      options.kernelBackend != "cublas" &&
+      options.kernelBackend != "cutlass") {
+    llvm::errs() << "Unsupported --kernel-backend: " << options.kernelBackend
+                 << "\n";
+    return false;
+  }
   return true;
+}
+
+static bool isGeneratedNvvmBackend(llvm::StringRef backend) {
+  return backend == "generated_nvvm" || backend == "mlir_nvvm";
+}
+
+static void printUnsupportedIntegratedBackend(llvm::StringRef backend) {
+  llvm::errs()
+      << "kernel backend '" << backend
+      << "' is recognized but not implemented in the compiler-integrated "
+         "runner yet. Use generated_nvvm/mlir_nvvm for the automatic MLIR GPU "
+         "route, or use mini-compiler-kernel-bench through perf_run.py for the "
+         "current external CUDA/cuBLAS baseline.\n";
 }
 
 static OwningOpRef<ModuleOp> loadModule(MLIRContext &context,
@@ -314,9 +399,50 @@ static double median(std::vector<double> values) {
   return (values[middle - 1] + values[middle]) / 2.0;
 }
 
+static double minValue(llvm::ArrayRef<double> values) {
+  return values.empty() ? 0.0
+                        : *std::min_element(values.begin(), values.end());
+}
+
+static double maxValue(llvm::ArrayRef<double> values) {
+  return values.empty() ? 0.0
+                        : *std::max_element(values.begin(), values.end());
+}
+
+static void writeMetricObject(llvm::raw_ostream &os, llvm::StringRef source,
+                              llvm::ArrayRef<double> timingsMs,
+                              bool includeTimings = true) {
+  std::vector<double> timingCopy(timingsMs.begin(), timingsMs.end());
+  os << "{\n";
+  os << "      \"source\": ";
+  writeJsonString(os, source);
+  os << ",\n";
+  os << "      \"min\": " << minValue(timingsMs) << ",\n";
+  os << "      \"mean\": " << average(timingsMs) << ",\n";
+  os << "      \"median\": " << median(std::move(timingCopy)) << ",\n";
+  os << "      \"max\": " << maxValue(timingsMs);
+  if (includeTimings) {
+    os << ",\n";
+    os << "      \"timings_ms\": [";
+    for (size_t i = 0, e = timingsMs.size(); i < e; ++i) {
+      if (i != 0)
+        os << ", ";
+      os << timingsMs[i];
+    }
+    os << "]\n";
+  } else {
+    os << "\n";
+  }
+  os << "    }";
+}
+
 static LogicalResult writeJsonReport(const RunnerOptions &options,
                                      llvm::ArrayRef<double> timingsMs,
-                                     bool hasResult, float result) {
+                                     llvm::ArrayRef<double> kernelTimingsMs,
+                                     bool hasResult, float result,
+                                     double compileMs,
+                                     double engineCreateMs,
+                                     double endToEndMs) {
   if (options.jsonOutput.empty())
     return success();
 
@@ -328,12 +454,6 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
     return failure();
   }
 
-  double minTiming =
-      timingsMs.empty() ? 0.0
-                        : *std::min_element(timingsMs.begin(), timingsMs.end());
-  double maxTiming =
-      timingsMs.empty() ? 0.0
-                        : *std::max_element(timingsMs.begin(), timingsMs.end());
   std::vector<double> timingCopy(timingsMs.begin(), timingsMs.end());
 
   os << "{\n";
@@ -343,6 +463,9 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
   os << ",\n";
   os << "  \"entry_function\": ";
   writeJsonString(os, options.entryFunction);
+  os << ",\n";
+  os << "  \"kernel_backend\": ";
+  writeJsonString(os, options.kernelBackend);
   os << ",\n";
   os << "  \"result_type\": ";
   writeJsonString(os, options.resultType);
@@ -367,10 +490,10 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
     os << "null";
   os << ",\n";
   os << "  \"latency_ms\": {\n";
-  os << "    \"min\": " << minTiming << ",\n";
+  os << "    \"min\": " << minValue(timingsMs) << ",\n";
   os << "    \"mean\": " << average(timingsMs) << ",\n";
   os << "    \"median\": " << median(std::move(timingCopy)) << ",\n";
-  os << "    \"max\": " << maxTiming << "\n";
+  os << "    \"max\": " << maxValue(timingsMs) << "\n";
   os << "  },\n";
   os << "  \"timings_ms\": [";
   for (size_t i = 0, e = timingsMs.size(); i < e; ++i) {
@@ -379,6 +502,34 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
     os << timingsMs[i];
   }
   os << "],\n";
+  os << "  \"metrics\": {\n";
+  if (!kernelTimingsMs.empty()) {
+    os << "    \"kernel_ms\": ";
+    writeMetricObject(os, "cuda_driver_event_kernel_sequence", kernelTimingsMs);
+    os << ",\n";
+  }
+  os << "    \"invoke_ms\": ";
+  writeMetricObject(os, "host_steady_clock_engine_invoke", timingsMs);
+  os << ",\n";
+  os << "    \"compile_ms\": " << compileMs << ",\n";
+  os << "    \"engine_create_ms\": " << engineCreateMs << ",\n";
+  os << "    \"end_to_end_ms\": " << endToEndMs << "\n";
+  os << "  },\n";
+  os << "  \"measurement_contract\": {\n";
+  os << "    \"default_compare_metric\": \"kernel_ms\",\n";
+  os << "    \"kernel_ms_available\": "
+     << (!kernelTimingsMs.empty() ? "true" : "false") << ",\n";
+  os << "    \"notes\": ";
+  if (!kernelTimingsMs.empty())
+    writeJsonString(os,
+                    "kernel_ms is the sum of CUDA driver event timings recorded "
+                    "inside mgpuLaunchKernel for one engine.invoke iteration");
+  else
+    writeJsonString(os,
+                    "kernel_ms is unavailable because CUDA runtime perf hooks "
+                    "were not loaded or no kernels were launched");
+  os << "\n";
+  os << "  },\n";
   os << "  \"artifacts\": {\n";
   os << "    \"lowered_mlir\": ";
   if (!options.dumpLowered.empty())
@@ -394,11 +545,17 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
 } // namespace
 
 int main(int argc, char **argv) {
+  auto endToEndStart = std::chrono::steady_clock::now();
   llvm::InitLLVM initLLVM(argc, argv);
   RunnerOptions runnerOptions;
   bool printedHelp = false;
   if (!parseOptions(argc, argv, runnerOptions, printedHelp))
     return printedHelp ? 0 : 1;
+
+  if (!isGeneratedNvvmBackend(runnerOptions.kernelBackend)) {
+    printUnsupportedIntegratedBackend(runnerOptions.kernelBackend);
+    return 2;
+  }
 
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
@@ -417,9 +574,11 @@ int main(int argc, char **argv) {
   MLIRContext context(registry);
   context.getOrLoadDialect<mini::MiniDialect>();
   OwningOpRef<ModuleOp> module;
+  double compileMs = 0.0;
 
   {
     NvtxRange range("compile");
+    auto start = std::chrono::steady_clock::now();
     module = loadModule(context, runnerOptions.inputFilename);
     if (!module) {
       llvm::errs() << "Failed to parse input module\n";
@@ -432,6 +591,8 @@ int main(int argc, char **argv) {
     }
     if (failed(dumpModule(*module, runnerOptions.dumpLowered)))
       return 1;
+    auto end = std::chrono::steady_clock::now();
+    compileMs = std::chrono::duration<double, std::milli>(end - start).count();
   }
 
   ExecutionEngineOptions engineOptions;
@@ -443,8 +604,10 @@ int main(int argc, char **argv) {
   };
 
   std::unique_ptr<ExecutionEngine> engine;
+  double engineCreateMs = 0.0;
   {
     NvtxRange range("engine_create");
+    auto start = std::chrono::steady_clock::now();
     auto maybeEngine =
         ExecutionEngine::create(module->getOperation(), engineOptions);
     if (!maybeEngine) {
@@ -453,10 +616,14 @@ int main(int argc, char **argv) {
       return 1;
     }
     engine = std::move(*maybeEngine);
+    auto end = std::chrono::steady_clock::now();
+    engineCreateMs =
+        std::chrono::duration<double, std::milli>(end - start).count();
   }
 
   float result = 0.0f;
   bool hasResult = runnerOptions.resultType == "f32";
+  PerfRuntimeHooks perfHooks(MINI_CUDA_RUNTIME_WRAPPERS_PATH);
   auto runOnce = [&]() -> int {
     if (runnerOptions.resultType == "void")
       return invokeVoid(*engine, runnerOptions.entryFunction);
@@ -470,28 +637,41 @@ int main(int argc, char **argv) {
   {
     NvtxRange range("warmup");
     for (int iteration = 0; iteration < runnerOptions.warmup; ++iteration) {
+      perfHooks.reset();
       if (runOnce() != 0)
         return 1;
     }
   }
 
   std::vector<double> timingsMs;
+  std::vector<double> kernelTimingsMs;
   timingsMs.reserve(static_cast<size_t>(runnerOptions.repeat));
+  kernelTimingsMs.reserve(static_cast<size_t>(runnerOptions.repeat));
   {
     NvtxRange range("benchmark");
     for (int iteration = 0; iteration < runnerOptions.repeat; ++iteration) {
+      perfHooks.reset();
       auto start = std::chrono::steady_clock::now();
       if (runOnce() != 0)
         return 1;
       auto end = std::chrono::steady_clock::now();
       std::chrono::duration<double, std::milli> elapsed = end - start;
       timingsMs.push_back(elapsed.count());
+      auto kernelTiming = perfHooks.collectSequence();
+      if (kernelTiming.count > 0)
+        kernelTimingsMs.push_back(kernelTiming.totalMs);
     }
   }
 
   {
     NvtxRange range("verify");
-    if (failed(writeJsonReport(runnerOptions, timingsMs, hasResult, result)))
+    auto endToEndEnd = std::chrono::steady_clock::now();
+    double endToEndMs =
+        std::chrono::duration<double, std::milli>(endToEndEnd - endToEndStart)
+            .count();
+    if (failed(writeJsonReport(runnerOptions, timingsMs, kernelTimingsMs,
+                               hasResult, result, compileMs, engineCreateMs,
+                               endToEndMs)))
       return 1;
   }
 

@@ -15,11 +15,13 @@
   - 生成每个 backend 的 JSON 和 `summary.json`
 - `scripts/perf_compare.py`
   - 读取 `summary.json`
-  - 输出 correctness、latency、gap
+  - 输出 correctness、指定 metric 和 gap
 - `scripts/perf_profile_nsys.sh`
   - Nsight Systems 包装入口
 - `scripts/perf_profile_ncu.sh`
   - Nsight Compute 包装入口
+- `scripts/perf_validate_cloud.sh`
+  - 云 GPU 上的一键构建、运行三 backend、按 `kernel_ms` 对比的验证入口
 - `tools/mini-compiler-kernel-bench.cpp`
   - 手写 CUDA 和 cuBLAS benchmark 入口
 - `tools/KernelBenchCuda.cu`
@@ -68,10 +70,17 @@ cmake --build build -j2
 运行 `gpu_runner_demo` 的三 backend 对比：
 
 ```bash
+./scripts/perf_validate_cloud.sh
+```
+
+等价的手动命令：
+
+```bash
 python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
   --backend mlir_nvvm \
   --backend cuda_hand \
   --backend cublas \
+  --metric kernel_ms \
   --warmup 10 \
   --repeat 50 \
   --run-dir perf/runs/gpu_runner_demo_a10_20260511
@@ -81,6 +90,7 @@ python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
 
 ```bash
 python3 ./scripts/perf_compare.py \
+  --metric latency_ms \
   perf/runs/gpu_runner_demo_a10_20260511/summary.json
 ```
 
@@ -89,6 +99,7 @@ python3 ./scripts/perf_compare.py \
 ```bash
 python3 ./scripts/perf_run.py \
   perf/cases/linear_relu_f32_m1024_n1024_k1024.json \
+  --metric kernel_ms \
   --warmup 10 \
   --repeat 50 \
   --run-dir perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511
@@ -98,8 +109,13 @@ python3 ./scripts/perf_run.py \
 
 ```bash
 python3 ./scripts/perf_compare.py \
+  --metric latency_ms \
   perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json
 ```
+
+新生成的 CUDA/cuBLAS benchmark JSON 会包含 `metrics.kernel_ms` 和 `metrics.invoke_ms`。`mini-compiler-gpu-runner` 在 CUDA runtime wrapper 可用时也会为 `mlir_nvvm` 输出 `metrics.kernel_ms`。`kernel_ms` 使用 CUDA event 计时，是默认公平对比指标；旧归档结果只有 v0 `latency_ms`，所以查看旧结果时需要显式传 `--metric latency_ms`。
+
+后续 compiler-integrated 手写 CUDA / 库路线会调用 `runtime/MiniCudaKernelRuntime.cu` 中的 `mini_cuda_linear_relu_f32` 和 `mini_cublas_linear_relu_f32`。当前这些 ABI 已存在，但 `mini.fused_linear_relu` 到 runtime call 的 MLIR lowering pass 仍是下一步工作。
 
 直接运行 benchmark binary：
 

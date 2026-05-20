@@ -19,6 +19,7 @@
     {
       "name": "mlir_nvvm",
       "kind": "mlir_gpu_runner",
+      "kernel_backend": "generated_nvvm",
       "enabled": true,
       "gpu_chip": "sm_86",
       "cubin_format": "fatbin",
