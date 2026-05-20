@@ -14,6 +14,7 @@
 - `08_unique_ptr.md` + `examples/08_unique_ptr.cpp`
 - `09_move_semantics.md` + `examples/09_move_semantics.cpp`
 - `10_raii.md` + `examples/10_raii.cpp`
+- `12_condition_variable.md` + `examples/12_condition_variable.cpp`
 
 ## 建议学习顺序
 
