@@ -22,6 +22,14 @@
   - Nsight Compute 包装入口
 - `scripts/perf_validate_cloud.sh`
   - 云 GPU 上的一键构建、运行三 backend、按 `kernel_ms` 对比的验证入口
+- `lib/GpuPasses.cpp`
+  - 提供 `mini-gpu-runtime-call-lowering`，把 `mini.fused_linear_relu` 降到显式 GPU runtime `func.call`
+- `test/gpu_runtime_call_lowering.mlir`
+  - `cuda_hand` / `cublas` runtime-call lowering 的 lit smoke test
+- `runtime/MiniCudaKernelRuntime.cu`
+  - 提供 runner integrated path 和 executable memref runtime-call path 使用的 CUDA/cuBLAS ABI
+- `tools/mini-compiler-runner.cpp`
+  - 支持 `--lowering-pipeline=...`，可直接执行 runtime-call lowering pipeline
 - `tools/mini-compiler-kernel-bench.cpp`
   - 手写 CUDA 和 cuBLAS benchmark 入口
 - `tools/KernelBenchCuda.cu`
@@ -90,7 +98,7 @@ python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
 
 ```bash
 python3 ./scripts/perf_compare.py \
-  --metric latency_ms \
+  --metric kernel_ms \
   perf/runs/gpu_runner_demo_a10_20260511/summary.json
 ```
 
@@ -109,13 +117,35 @@ python3 ./scripts/perf_run.py \
 
 ```bash
 python3 ./scripts/perf_compare.py \
-  --metric latency_ms \
+  --metric kernel_ms \
   perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json
 ```
 
-新生成的 CUDA/cuBLAS benchmark JSON 会包含 `metrics.kernel_ms` 和 `metrics.invoke_ms`。`mini-compiler-gpu-runner` 在 CUDA runtime wrapper 可用时也会为 `mlir_nvvm` 输出 `metrics.kernel_ms`。`kernel_ms` 使用 CUDA event 计时，是默认公平对比指标；旧归档结果只有 v0 `latency_ms`，所以查看旧结果时需要显式传 `--metric latency_ms`。
+新生成的 CUDA/cuBLAS benchmark JSON 会包含 `metrics.kernel_ms` 和 `metrics.invoke_ms`。`mini-compiler-gpu-runner` 在 CUDA runtime wrapper 可用时会为 `mlir_nvvm`、`cuda_hand`、`cublas` 输出 `metrics.kernel_ms`。`kernel_ms` 使用 CUDA event 计时，是默认公平对比指标；旧归档结果只有 v0 `latency_ms`，所以查看旧结果时需要显式传 `--metric latency_ms`。
 
-后续 compiler-integrated 手写 CUDA / 库路线会调用 `runtime/MiniCudaKernelRuntime.cu` 中的 `mini_cuda_linear_relu_f32` 和 `mini_cublas_linear_relu_f32`。当前这些 ABI 已存在，但 `mini.fused_linear_relu` 到 runtime call 的 MLIR lowering pass 仍是下一步工作。
+当前 compiler-integrated 手写 CUDA / 库路线已经通过 `mini-compiler-gpu-runner --kernel-backend=cuda_hand|cublas` 调用 `runtime/MiniCudaKernelRuntime.cu` 中的 `mini_cuda_linear_relu_f32` 和 `mini_cublas_linear_relu_f32`。IR 层也已提供 `mini-gpu-runtime-call-lowering`，可以把静态 shape 的 `mini.fused_linear_relu` 降到 `mini_cuda_linear_relu_f32_memref` / `mini_cublas_linear_relu_f32_memref` 形式的显式 `func.call`，并通过 `mini-gpu-runtime-call-lowering-pipeline` 降到 LLVM 后执行。
+
+查看 runtime-call lowering IR：
+
+```bash
+./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
+  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cuda_hand})'
+
+./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
+  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cublas})'
+```
+
+执行 runtime-call lowering pipeline：
+
+```bash
+./build/bin/mini-compiler-runner test/gpu_runner_demo.mlir \
+  --lowering-pipeline='mini-gpu-runtime-call-lowering-pipeline{backend=cuda_hand}' \
+  --shared-libs=build/lib/libMiniCudaRuntimeWrappers.so
+
+./build/bin/mini-compiler-runner test/gpu_runner_demo.mlir \
+  --lowering-pipeline='mini-gpu-runtime-call-lowering-pipeline{backend=cublas}' \
+  --shared-libs=build/lib/libMiniCudaRuntimeWrappers.so
+```
 
 直接运行 benchmark binary：
 

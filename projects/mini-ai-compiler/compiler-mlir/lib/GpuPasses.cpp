@@ -1,7 +1,9 @@
 #include "MiniCompiler/Passes.h"
+#include "MiniCompiler/MiniDialect.h"
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/ParallelLoopMapper.h"
@@ -22,6 +24,64 @@ namespace mini {
 namespace {
 
 static constexpr int64_t kMiniGpuTileSizes[] = {8, 8, 1};
+
+static FailureOr<RankedTensorType> getRankedF32Tensor(Value value,
+                                                      unsigned rank) {
+  auto type = dyn_cast<RankedTensorType>(value.getType());
+  if (!type || type.getRank() != static_cast<int64_t>(rank) ||
+      !type.getElementType().isF32())
+    return failure();
+  if (!type.hasStaticShape())
+    return failure();
+  return type;
+}
+
+static MemRefType getIdentityMemRefFor(RankedTensorType tensorType) {
+  return MemRefType::get(tensorType.getShape(), tensorType.getElementType());
+}
+
+static Value createToBuffer(Location loc, Value tensor, MemRefType memrefType,
+                            OpBuilder &builder, bool readOnly) {
+  OperationState state(loc, bufferization::ToBufferOp::getOperationName());
+  state.addOperands(tensor);
+  state.addTypes(memrefType);
+  if (readOnly)
+    state.addAttribute("read_only", builder.getUnitAttr());
+  return builder.create(state)->getResult(0);
+}
+
+static Value createToTensor(Location loc, Value buffer,
+                            RankedTensorType tensorType, OpBuilder &builder) {
+  OperationState state(loc, bufferization::ToTensorOp::getOperationName());
+  state.addOperands(buffer);
+  state.addTypes(tensorType);
+  state.addAttribute("restrict", builder.getUnitAttr());
+  state.addAttribute("writable", builder.getUnitAttr());
+  return builder.create(state)->getResult(0);
+}
+
+static StringRef getLinearReluRuntimeCallee(StringRef backend) {
+  if (backend == "cublas")
+    return "mini_cublas_linear_relu_f32_memref";
+  return "mini_cuda_linear_relu_f32_memref";
+}
+
+static LogicalResult getOrCreateRuntimeDecl(ModuleOp module, Location loc,
+                                            StringRef callee,
+                                            FunctionType functionType) {
+  if (auto existing = module.lookupSymbol<func::FuncOp>(callee)) {
+    if (existing.getFunctionType() != functionType)
+      return existing.emitError("runtime declaration type mismatch for ")
+             << callee;
+    return success();
+  }
+
+  OpBuilder builder(module.getContext());
+  builder.setInsertionPointToStart(module.getBody());
+  auto func = builder.create<func::FuncOp>(loc, callee, functionType);
+  func.setPrivate();
+  return success();
+}
 
 static FailureOr<SmallVector<int64_t>> parseTileSizes(StringRef spec) {
   SmallVector<int64_t> tileSizes;
@@ -46,6 +106,14 @@ struct MiniGpuTilePipelineOptions
       *this, "tile-sizes",
       llvm::cl::desc("Comma-separated tile sizes for outer GPU blocks"),
       llvm::cl::init("")};
+};
+
+struct MiniGpuRuntimeCallPipelineOptions
+    : public PassPipelineOptions<MiniGpuRuntimeCallPipelineOptions> {
+  PassOptions::Option<std::string> backend{
+      *this, "backend",
+      llvm::cl::desc("Runtime backend for mini.fused_linear_relu: cuda_hand or cublas"),
+      llvm::cl::init("cuda_hand")};
 };
 
 static gpu::Processor getProcessorFor(MiniGpuMappingLevel level, int dimension) {
@@ -351,6 +419,124 @@ struct MiniGpuHostSharedPass
   }
 };
 
+struct MiniGpuRuntimeCallLoweringPass
+    : public PassWrapper<MiniGpuRuntimeCallLoweringPass,
+                         OperationPass<ModuleOp>> {
+  MiniGpuRuntimeCallLoweringPass() = default;
+  MiniGpuRuntimeCallLoweringPass(const MiniGpuRuntimeCallLoweringPass &pass)
+      : PassWrapper(pass) {}
+
+  Option<std::string> backend{
+      *this, "backend",
+      llvm::cl::desc("Runtime backend for mini.fused_linear_relu: cuda_hand or cublas"),
+      llvm::cl::init("cuda_hand")};
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<arith::ArithDialect, bufferization::BufferizationDialect,
+                    func::FuncDialect, memref::MemRefDialect, MiniDialect>();
+  }
+
+  StringRef getArgument() const final {
+    return "mini-gpu-runtime-call-lowering";
+  }
+  StringRef getDescription() const final {
+    return "Lower mini.fused_linear_relu to an explicit GPU runtime func.call";
+  }
+
+  void runOnOperation() override {
+    ModuleOp module = getOperation();
+    if (backend != "cuda_hand" && backend != "cublas") {
+      module.emitError("mini-gpu-runtime-call-lowering supports backend=cuda_hand "
+                       "or backend=cublas");
+      signalPassFailure();
+      return;
+    }
+
+    SmallVector<FusedLinearReluOp> worklist;
+    module.walk([&](FusedLinearReluOp op) { worklist.push_back(op); });
+
+    for (FusedLinearReluOp op : worklist) {
+      auto inputType = getRankedF32Tensor(op.getInput(), 2);
+      auto weightType = getRankedF32Tensor(op.getWeight(), 2);
+      auto biasType = getRankedF32Tensor(op.getBias(), 1);
+      auto resultType = dyn_cast<RankedTensorType>(op.getOutput().getType());
+      if (failed(inputType) || failed(weightType) || failed(biasType) ||
+          !resultType || resultType.getRank() != 2 ||
+          !resultType.getElementType().isF32() || !resultType.hasStaticShape()) {
+        op.emitError("runtime call lowering currently supports only static "
+                     "ranked f32 linear_relu tensors");
+        signalPassFailure();
+        return;
+      }
+
+      int64_t m = inputType->getShape()[0];
+      int64_t k = inputType->getShape()[1];
+      int64_t n = weightType->getShape()[0];
+      if (weightType->getShape()[1] != k || biasType->getShape()[0] != n ||
+          resultType.getShape()[0] != m || resultType.getShape()[1] != n) {
+        op.emitError("linear_relu runtime call shape contract mismatch");
+        signalPassFailure();
+        return;
+      }
+
+      OpBuilder builder(op);
+      Location loc = op.getLoc();
+      auto inputMemRefType = getIdentityMemRefFor(*inputType);
+      auto weightMemRefType = getIdentityMemRefFor(*weightType);
+      auto biasMemRefType = getIdentityMemRefFor(*biasType);
+      auto outputMemRefType = getIdentityMemRefFor(resultType);
+
+      Value inputBuffer =
+          createToBuffer(loc, op.getInput(), inputMemRefType, builder,
+                         /*readOnly=*/true);
+      Value weightBuffer =
+          createToBuffer(loc, op.getWeight(), weightMemRefType, builder,
+                         /*readOnly=*/true);
+      Value biasBuffer = createToBuffer(loc, op.getBias(), biasMemRefType,
+                                        builder, /*readOnly=*/true);
+      auto outputBuffer =
+          builder.create<memref::AllocOp>(loc, outputMemRefType).getResult();
+      Value mValue = builder.create<arith::ConstantIndexOp>(loc, m);
+      Value nValue = builder.create<arith::ConstantIndexOp>(loc, n);
+      Value kValue = builder.create<arith::ConstantIndexOp>(loc, k);
+
+      StringRef callee = getLinearReluRuntimeCallee(backend);
+      auto functionType = builder.getFunctionType(
+          TypeRange{inputMemRefType, weightMemRefType, biasMemRefType,
+                    outputMemRefType, builder.getIndexType(),
+                    builder.getIndexType(), builder.getIndexType()},
+          TypeRange{});
+      if (failed(getOrCreateRuntimeDecl(module, loc, callee, functionType))) {
+        signalPassFailure();
+        return;
+      }
+
+      builder.create<func::CallOp>(
+          loc, callee, TypeRange{},
+          ValueRange{inputBuffer, weightBuffer, biasBuffer, outputBuffer, mValue,
+                     nValue, kValue});
+      Value resultTensor = createToTensor(loc, outputBuffer, resultType, builder);
+      op.getOutput().replaceAllUsesWith(resultTensor);
+      op.erase();
+    }
+
+    SmallVector<ConstantOp> constants;
+    module.walk([&](ConstantOp op) { constants.push_back(op); });
+    for (ConstantOp op : constants) {
+      auto valueAttr = dyn_cast_or_null<TypedAttr>(op.getValue());
+      if (!valueAttr) {
+        op.emitError("expected typed mini.constant value");
+        signalPassFailure();
+        return;
+      }
+      OpBuilder builder(op);
+      auto lowered = builder.create<arith::ConstantOp>(op.getLoc(), valueAttr);
+      op.getOutput().replaceAllUsesWith(lowered.getResult());
+      op.erase();
+    }
+  }
+};
+
 static FailureOr<SmallVector<int64_t>>
 getConfiguredTileSizes(StringRef spec) {
   if (spec.empty())
@@ -367,6 +553,32 @@ static void buildMiniGpuTilePipeline(OpPassManager &pm,
         "mini-gpu-tile-pipeline expects tile-sizes to be a comma-separated "
         "list of positive integers");
   pm.addNestedPass<func::FuncOp>(createMiniGpuTilePass(*tileSizes));
+}
+
+static void buildMiniGpuRuntimeCallPipeline(
+    OpPassManager &pm, const MiniGpuRuntimeCallPipelineOptions &options) {
+  std::string pipelineText =
+      "func.func(mini-canonicalize,mini-fusion),"
+      "mini-gpu-runtime-call-lowering{backend=" +
+      options.backend +
+      "},"
+      "one-shot-bufferize{bufferize-function-boundaries "
+      "function-boundary-type-conversion=identity-layout-map},"
+      "drop-equivalent-buffer-results,"
+      "buffer-results-to-out-params,"
+      "convert-bufferization-to-memref,"
+      "convert-linalg-to-loops,"
+      "convert-scf-to-cf,"
+      "convert-cf-to-llvm,"
+      "convert-arith-to-llvm,"
+      "convert-index-to-llvm,"
+      "expand-realloc,"
+      "finalize-memref-to-llvm,"
+      "convert-func-to-llvm,"
+      "reconcile-unrealized-casts";
+  if (failed(parsePassPipeline(pipelineText, pm)))
+    llvm::report_fatal_error(
+        "failed to parse mini-gpu-runtime-call-lowering-pipeline");
 }
 
 } // namespace
@@ -387,10 +599,15 @@ std::unique_ptr<Pass> createMiniGpuHostSharedPass() {
   return std::make_unique<MiniGpuHostSharedPass>();
 }
 
+std::unique_ptr<Pass> createMiniGpuRuntimeCallLoweringPass() {
+  return std::make_unique<MiniGpuRuntimeCallLoweringPass>();
+}
+
 void registerMiniGpuPasses() {
   PassRegistration<MiniGpuTilePass>();
   PassRegistration<MiniGpuMapPass>();
   PassRegistration<MiniGpuHostSharedPass>();
+  PassRegistration<MiniGpuRuntimeCallLoweringPass>();
 }
 
 void registerMiniGpuPassPipelines() {
@@ -398,6 +615,10 @@ void registerMiniGpuPassPipelines() {
       "mini-gpu-tile-pipeline",
       "Run the project GPU tiling pass with configurable tile sizes",
       buildMiniGpuTilePipeline);
+  PassPipelineRegistration<MiniGpuRuntimeCallPipelineOptions>(
+      "mini-gpu-runtime-call-lowering-pipeline",
+      "Lower static mini.fused_linear_relu to an executable CUDA runtime call path",
+      buildMiniGpuRuntimeCallPipeline);
 }
 
 } // namespace mini

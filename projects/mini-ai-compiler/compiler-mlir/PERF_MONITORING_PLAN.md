@@ -92,7 +92,7 @@ python3 ./scripts/perf_run.py perf/cases/linear_relu_f32_m1024_n1024_k1024.json 
   --run-dir perf/runs/linear_relu_integrated_a10
 ```
 
-上面命令中 `generated_nvvm` 当前已经走 `mini-compiler-gpu-runner`，并通过 CUDA runtime perf hooks 输出 `metrics.kernel_ms`。`cuda_hand` / `cublas` / `cutlass` 已作为 `--kernel-backend` 稳定接口预留，但编译器集成 runtime-call lowering 还未实现；当前仍应通过 `mini-compiler-kernel-bench` 作为外部微基线运行。
+上面命令中 `generated_nvvm` 当前已经走 `mini-compiler-gpu-runner`，并通过 CUDA runtime perf hooks 输出 `metrics.kernel_ms`。`cuda_hand` / `cublas` 也已接入同一个 runner 的 backend selection 入口：runner 使用 case problem 描述准备同一组 device buffer，再调用 `MiniCudaKernelRuntime.cu` 中的 runtime ABI 并回收 `kernel_ms`。`cutlass` 仍保留为稳定接口，等待后续实现。
 
 ## 输入、输出与分叉点
 
@@ -270,8 +270,8 @@ PTX、cubin、fatbin 与 profiling 的关系：
 
 但这里需要明确区分 v0 现状和目标方案：
 
-- 当前只有 `mlir_nvvm` 是编译器自动 lowering 后由 `mini-compiler-gpu-runner` 执行。
-- 当前 `cuda_hand` / `cublas` 由 `mini-compiler-kernel-bench` 作为外部 benchmark 执行，还不是由编译器 lower 成 runtime call。
+- 当前 `mlir_nvvm` 是编译器自动 lowering 后由 `mini-compiler-gpu-runner` 执行。
+- 当前 `cuda_hand` / `cublas` 已由 `mini-compiler-gpu-runner` 统一调度，并通过 runtime ABI 执行；它们还不是由 `mini.fused_linear_relu` MLIR op lower 成 `func.call`，但已经共享 runner、case problem、buffer 准备、correctness 和 JSON metric 口径。
 - 当前 `mlir_nvvm` 的 `latency_ms` 是 benchmark loop 内的 host wall time，主要反映 `engine.invoke` 到返回的耗时，不等同于 pure kernel GPU time。
 - 当前 `cuda_hand` / `cublas` 的 `latency_ms` 是 host wall launch-to-stream-sync 时间，已排除 allocation / H2D，但仍不是 CUDA event 口径的 `kernel_ms`。
 - 因此当前 A10 归档结果适合验证链路和观察大方向，不应作为最终三路线 kernel 性能公平排名。
@@ -318,6 +318,16 @@ PTX、cubin、fatbin 与 profiling 的关系：
 - `scripts/perf_validate_cloud.sh`
   - 云 GPU 上的一键验证入口
   - 负责 CMake configure/build、运行 `gpu_runner_demo` 三 backend、按 `kernel_ms` 写 `compare_kernel_ms.txt`
+- `lib/GpuPasses.cpp`
+  - `mini-gpu-runtime-call-lowering`
+  - 将静态 shape 的 `mini.fused_linear_relu` 降到 `mini_cuda_linear_relu_f32_memref` / `mini_cublas_linear_relu_f32_memref` 形式的显式 `func.call`
+  - 提供 `mini-gpu-runtime-call-lowering-pipeline{backend=cuda_hand|cublas}`，用于降到 LLVM 后执行 runtime-call route
+- `test/gpu_runtime_call_lowering.mlir`
+  - 验证 `cuda_hand` / `cublas` runtime-call lowering 的 smoke test
+- `runtime/MiniCudaKernelRuntime.cu`
+  - 提供 runner integrated path 和 executable memref runtime-call path 使用的 CUDA/cuBLAS ABI
+- `tools/mini-compiler-runner.cpp`
+  - 支持 `--lowering-pipeline=...`，可直接执行 runtime-call lowering pipeline
 - `tools/mini-compiler-gpu-runner.cpp`
   - `mlir_nvvm` backend 主入口
 - `tools/mini-compiler-kernel-bench.cpp`
@@ -528,19 +538,21 @@ Nsight Compute 的手写 CUDA demo 结论是：小型 demo grid 过小，无法�
 
 ### Phase 2：把手写 CUDA 接进编译器路线
 
-- 已新增 runner 级 backend selection 接口：`--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass`。当前 `generated_nvvm` / `mlir_nvvm` 可执行，`cuda_hand` / `cublas` / `cutlass` 会返回明确的未实现错误，作为后续 compiler-integrated runtime-call lowering 的稳定入口。
+- 已新增 runner 级 backend selection 接口：`--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass`。当前 `generated_nvvm` / `mlir_nvvm`、`cuda_hand`、`cublas` 可执行；`cutlass` 会返回明确的未实现错误。
 - 已新增 CUDA runtime ABI 实现目标：
   - `runtime/MiniCudaKernelRuntime.cu`
   - `mini_cuda_linear_relu_f32`
   - `mini_cublas_linear_relu_f32`
   - 两个 ABI 都会把 CUDA event 计时写入 `CudaRuntimeWrappers.cpp` 的 perf accumulator，供 `mini-compiler-gpu-runner` 汇总 `metrics.kernel_ms`。
-- 为 `mini.fused_linear_relu` 增加 `cuda_hand` lowering，生成对 `mini_cuda_linear_relu_f32` 的 runtime call。
-- 在 runtime 中复用 `KernelBenchCuda.cu` 的手写 kernel 实现，但输入输出来自编译器准备的 device memref。
-- 用同一个 runner 输出 `generated_nvvm` 和 `cuda_hand` 的 `kernel_ms`、`invoke_ms`、correctness。
+- 已在 `mini-compiler-gpu-runner` 中为 `cuda_hand` 接入 integrated runtime path：runner 使用 `--problem-operation/--data-profile/--m/--n/--k` 创建 device buffer，调用 `mini_cuda_linear_relu_f32`，并输出 `kernel_ms`、`invoke_ms`、correctness。
+- 已新增 `mini-gpu-runtime-call-lowering{backend=cuda_hand}`，把静态 shape 的 `mini.fused_linear_relu` 降到 `mini_cuda_linear_relu_f32_memref` 形式的显式 `func.call`。
+- 已新增 `mini-gpu-runtime-call-lowering-pipeline{backend=cuda_hand}` 和对应 executable memref ABI，可通过 `mini-compiler-runner` 实际执行 runtime-call route。
 
 ### Phase 3：把第三方库接进编译器路线
 
-- 为 `mini.fused_linear_relu` 增加 `cublas` lowering，生成对 `mini_cublas_linear_relu_f32` 的 runtime call。
+- 已在 `mini-compiler-gpu-runner` 中为 `cublas` 接入 integrated runtime path，调用 `mini_cublas_linear_relu_f32` 并使用同一套 metric schema。
+- 已新增 `mini-gpu-runtime-call-lowering{backend=cublas}`，把静态 shape 的 `mini.fused_linear_relu` 降到 `mini_cublas_linear_relu_f32_memref` 形式的显式 `func.call`。
+- 已新增 `mini-gpu-runtime-call-lowering-pipeline{backend=cublas}` 和对应 executable memref ABI，可通过 `mini-compiler-runner` 实际执行 runtime-call route。
 - 将 cuBLAS handle、workspace、algorithm selection 放到 prepare / warmup，不计入默认 `kernel_ms`。
 - 后续接入 CUTLASS 时，优先把 CUTLASS kernel 作为库路线的稳定实现，cuBLAS 作为高质量 vendor baseline。
 

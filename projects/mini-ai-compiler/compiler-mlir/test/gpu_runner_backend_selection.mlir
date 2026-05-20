@@ -1,7 +1,5 @@
-// RUN: not %mini_compiler_gpu_runner %s --kernel-backend=cuda_hand 2>&1 | FileCheck %s --check-prefix=CUDA-HAND
-// RUN: not %mini_compiler_gpu_runner %s --kernel-backend=cublas 2>&1 | FileCheck %s --check-prefix=CUBLAS
-// CUDA-HAND: kernel backend 'cuda_hand' is recognized but not implemented
-// CUBLAS: kernel backend 'cublas' is recognized but not implemented
+// RUN: not %mini_compiler_gpu_runner %s --kernel-backend=cutlass 2>&1 | FileCheck %s --check-prefix=CUTLASS
+// CUTLASS: kernel backend 'cutlass' is recognized but not implemented
 
 module {
   func.func @run() -> f32 attributes {llvm.emit_c_interface} {

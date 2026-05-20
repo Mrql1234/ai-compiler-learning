@@ -33,6 +33,7 @@ struct RunnerOptions {
   std::string inputFilename;
   std::string entryFunction = "run";
   std::string resultType = "f32";
+  std::string loweringPipeline;
   bool quantized = false;
   std::vector<std::string> sharedLibs;
 };
@@ -40,7 +41,8 @@ struct RunnerOptions {
 static void printUsage(llvm::raw_ostream &os, llvm::StringRef programName) {
   os << "Usage: " << programName
      << " <input.mlir> [-e function] [--entry-point-result=f32|void]"
-        " [--quantized] [--shared-libs=lib1,lib2]\n";
+        " [--quantized] [--lowering-pipeline=PIPELINE]"
+        " [--shared-libs=lib1,lib2]\n";
 }
 
 static bool parseOptions(int argc, char **argv, RunnerOptions &options,
@@ -66,6 +68,10 @@ static bool parseOptions(int argc, char **argv, RunnerOptions &options,
     }
     if (arg == "--quantized") {
       options.quantized = true;
+      continue;
+    }
+    if (arg.consume_front("--lowering-pipeline=")) {
+      options.loweringPipeline = arg.str();
       continue;
     }
     if (arg.consume_front("--shared-libs=")) {
@@ -108,10 +114,14 @@ static OwningOpRef<ModuleOp> loadModule(MLIRContext &context,
   return parseSourceFile<ModuleOp>(sourceMgr, &context);
 }
 
-static LogicalResult runMiniCpuLowering(ModuleOp module, bool quantized) {
+static LogicalResult runMiniLowering(ModuleOp module,
+                                     const RunnerOptions &options) {
   PassManager pm(module.getContext());
-  if (failed(parsePassPipeline(
-          quantized ? "mini-quantized-cpu-lowering" : "mini-cpu-lowering", pm)))
+  StringRef pipeline = options.loweringPipeline.empty()
+                           ? (options.quantized ? "mini-quantized-cpu-lowering"
+                                                : "mini-cpu-lowering")
+                           : StringRef(options.loweringPipeline);
+  if (failed(parsePassPipeline(pipeline, pm)))
     return failure();
   return pm.run(module);
 }
@@ -176,7 +186,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  if (failed(runMiniCpuLowering(*module, runnerOptions.quantized))) {
+  if (failed(runMiniLowering(*module, runnerOptions))) {
     llvm::errs() << "Failed to run selected CPU lowering pipeline\n";
     return 1;
   }

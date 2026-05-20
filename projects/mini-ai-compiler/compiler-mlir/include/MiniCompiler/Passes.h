@@ -20,6 +20,7 @@ std::unique_ptr<mlir::Pass>
 createMiniGpuTilePass(llvm::ArrayRef<int64_t> tileSizes);
 std::unique_ptr<mlir::Pass> createMiniGpuMapPass();
 std::unique_ptr<mlir::Pass> createMiniGpuHostSharedPass();
+std::unique_ptr<mlir::Pass> createMiniGpuRuntimeCallLoweringPass();
 void registerMiniGpuPasses();
 void registerMiniGpuPassPipelines();
 void registerMiniQuantPasses();

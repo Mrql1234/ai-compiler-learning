@@ -1,6 +1,6 @@
 build/
+src/transpose_demo
 *.qdrep
 *.nsys-rep
 *.sqlite
 *.ncu-rep
-

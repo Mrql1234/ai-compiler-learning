@@ -1,6 +1,7 @@
 {
   "name": "linear_relu_f32_m1024_n1024_k1024",
   "description": "Large CUDA library/hand-kernel linear+relu case for cloud GPU performance monitoring.",
+  "input": "test/gpu_runner_demo.mlir",
   "entry_function": "run",
   "result_type": "f32",
   "problem": {
@@ -17,41 +18,17 @@
   "backends": [
     {
       "name": "cuda_hand",
-      "kind": "external",
+      "kind": "mlir_gpu_runner",
+      "kernel_backend": "cuda_hand",
       "enabled": true,
-      "run_once": true,
-      "command": [
-        "./build/bin/mini-compiler-kernel-bench",
-        "--backend",
-        "cuda_hand",
-        "--case",
-        "{case}",
-        "--warmup",
-        "{warmup}",
-        "--repeat",
-        "{repeat}",
-        "--json-output",
-        "{json_output}"
-      ]
+      "run_once": true
     },
     {
       "name": "cublas",
-      "kind": "external",
+      "kind": "mlir_gpu_runner",
+      "kernel_backend": "cublas",
       "enabled": true,
-      "run_once": true,
-      "command": [
-        "./build/bin/mini-compiler-kernel-bench",
-        "--backend",
-        "cublas",
-        "--case",
-        "{case}",
-        "--warmup",
-        "{warmup}",
-        "--repeat",
-        "{repeat}",
-        "--json-output",
-        "{json_output}"
-      ]
+      "run_once": true
     }
   ]
 }

@@ -135,6 +135,11 @@ struct RunnerOptions {
   std::string ptxasCmdOptions;
   std::string jsonOutput;
   std::string dumpLowered;
+  std::string problemOperation = "linear_relu";
+  std::string dataProfile = "deterministic";
+  int64_t problemM = 2;
+  int64_t problemN = 8;
+  int64_t problemK = 4;
   int optLevel = 3;
   int warmup = 0;
   int repeat = 1;
@@ -147,6 +152,8 @@ static void printUsage(llvm::raw_ostream &os, llvm::StringRef programName) {
         " [--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass]"
         " [--gpu-chip=sm_86] [--cubin-format=fatbin|isa]"
         " [--ptxas-cmd-options=...] [--opt-level=0..3]"
+        " [--problem-operation=linear_relu] [--data-profile=name]"
+        " [--m=M] [--n=N] [--k=K]"
         " [--warmup=N] [--repeat=N] [--json-output=path]"
         " [--dump-lowered=path]\n";
 }
@@ -235,6 +242,35 @@ static bool parseOptions(int argc, char **argv, RunnerOptions &options,
       options.dumpLowered = arg.str();
       continue;
     }
+    if (arg.consume_front("--problem-operation=")) {
+      options.problemOperation = arg.str();
+      continue;
+    }
+    if (arg.consume_front("--data-profile=")) {
+      options.dataProfile = arg.str();
+      continue;
+    }
+    if (arg.consume_front("--m=")) {
+      if (arg.getAsInteger(10, options.problemM) || options.problemM <= 0) {
+        llvm::errs() << "Expected --m to be a positive integer\n";
+        return false;
+      }
+      continue;
+    }
+    if (arg.consume_front("--n=")) {
+      if (arg.getAsInteger(10, options.problemN) || options.problemN <= 0) {
+        llvm::errs() << "Expected --n to be a positive integer\n";
+        return false;
+      }
+      continue;
+    }
+    if (arg.consume_front("--k=")) {
+      if (arg.getAsInteger(10, options.problemK) || options.problemK <= 0) {
+        llvm::errs() << "Expected --k to be a positive integer\n";
+        return false;
+      }
+      continue;
+    }
     if (arg.starts_with("-")) {
       llvm::errs() << "Unknown option: " << arg << "\n";
       return false;
@@ -271,10 +307,61 @@ static void printUnsupportedIntegratedBackend(llvm::StringRef backend) {
   llvm::errs()
       << "kernel backend '" << backend
       << "' is recognized but not implemented in the compiler-integrated "
-         "runner yet. Use generated_nvvm/mlir_nvvm for the automatic MLIR GPU "
-         "route, or use mini-compiler-kernel-bench through perf_run.py for the "
-         "current external CUDA/cuBLAS baseline.\n";
+         "runner yet. Use generated_nvvm/mlir_nvvm, cuda_hand, or cublas for "
+         "currently available GPU routes.\n";
 }
+
+class IntegratedKernelRuntime {
+public:
+  explicit IntegratedKernelRuntime(const char *runtimePath) {
+#ifndef _WIN32
+    if (!runtimePath || runtimePath[0] == '\0')
+      return;
+    handle = dlopen(runtimePath, RTLD_LAZY | RTLD_LOCAL);
+    if (!handle)
+      return;
+    createFn = reinterpret_cast<CreateFn>(
+        dlsym(handle, "miniCreateLinearReluF32Problem"));
+    runFn =
+        reinterpret_cast<RunFn>(dlsym(handle, "miniRunLinearReluF32Problem"));
+    copyResultFn = reinterpret_cast<CopyResultFn>(
+        dlsym(handle, "miniCopyFirstLinearReluF32Result"));
+    destroyFn = reinterpret_cast<DestroyFn>(
+        dlsym(handle, "miniDestroyLinearReluF32Problem"));
+#else
+    (void)runtimePath;
+#endif
+  }
+
+  bool available() const { return createFn && runFn && copyResultFn && destroyFn; }
+
+  void *create(int64_t m, int64_t n, int64_t k,
+               llvm::StringRef dataProfile) const {
+    return createFn(m, n, k, dataProfile.str().c_str());
+  }
+
+  void run(void *problem, llvm::StringRef backend) const {
+    runFn(problem, backend.str().c_str());
+  }
+
+  float copyFirstResult(void *problem) const { return copyResultFn(problem); }
+
+  void destroy(void *problem) const { destroyFn(problem); }
+
+private:
+  using CreateFn = void *(*)(int64_t, int64_t, int64_t, const char *);
+  using RunFn = void (*)(void *, const char *);
+  using CopyResultFn = float (*)(void *);
+  using DestroyFn = void (*)(void *);
+
+#ifndef _WIN32
+  void *handle = nullptr;
+#endif
+  CreateFn createFn = nullptr;
+  RunFn runFn = nullptr;
+  CopyResultFn copyResultFn = nullptr;
+  DestroyFn destroyFn = nullptr;
+};
 
 static OwningOpRef<ModuleOp> loadModule(MLIRContext &context,
                                         llvm::StringRef inputFilename) {
@@ -442,6 +529,7 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
                                      bool hasResult, float result,
                                      double compileMs,
                                      double engineCreateMs,
+                                     double prepareMs,
                                      double endToEndMs) {
   if (options.jsonOutput.empty())
     return success();
@@ -457,7 +545,11 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
   std::vector<double> timingCopy(timingsMs.begin(), timingsMs.end());
 
   os << "{\n";
-  os << "  \"backend\": \"mlir_nvvm\",\n";
+  os << "  \"backend\": ";
+  writeJsonString(os, isGeneratedNvvmBackend(options.kernelBackend)
+                          ? "mlir_nvvm"
+                          : options.kernelBackend);
+  os << ",\n";
   os << "  \"input\": ";
   writeJsonString(os, options.inputFilename);
   os << ",\n";
@@ -505,7 +597,11 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
   os << "  \"metrics\": {\n";
   if (!kernelTimingsMs.empty()) {
     os << "    \"kernel_ms\": ";
-    writeMetricObject(os, "cuda_driver_event_kernel_sequence", kernelTimingsMs);
+    writeMetricObject(os,
+                      isGeneratedNvvmBackend(options.kernelBackend)
+                          ? "cuda_driver_event_kernel_sequence"
+                          : "cuda_event_runtime_kernel_sequence",
+                      kernelTimingsMs);
     os << ",\n";
   }
   os << "    \"invoke_ms\": ";
@@ -513,6 +609,7 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
   os << ",\n";
   os << "    \"compile_ms\": " << compileMs << ",\n";
   os << "    \"engine_create_ms\": " << engineCreateMs << ",\n";
+  os << "    \"prepare_ms\": " << prepareMs << ",\n";
   os << "    \"end_to_end_ms\": " << endToEndMs << "\n";
   os << "  },\n";
   os << "  \"measurement_contract\": {\n";
@@ -521,9 +618,12 @@ static LogicalResult writeJsonReport(const RunnerOptions &options,
      << (!kernelTimingsMs.empty() ? "true" : "false") << ",\n";
   os << "    \"notes\": ";
   if (!kernelTimingsMs.empty())
-    writeJsonString(os,
-                    "kernel_ms is the sum of CUDA driver event timings recorded "
-                    "inside mgpuLaunchKernel for one engine.invoke iteration");
+    writeJsonString(
+        os, isGeneratedNvvmBackend(options.kernelBackend)
+                ? "kernel_ms is the sum of CUDA driver event timings recorded "
+                  "inside mgpuLaunchKernel for one engine.invoke iteration"
+                : "kernel_ms is the CUDA event timing recorded inside the "
+                  "selected integrated runtime ABI for one runner iteration");
   else
     writeJsonString(os,
                     "kernel_ms is unavailable because CUDA runtime perf hooks "
@@ -552,9 +652,95 @@ int main(int argc, char **argv) {
   if (!parseOptions(argc, argv, runnerOptions, printedHelp))
     return printedHelp ? 0 : 1;
 
-  if (!isGeneratedNvvmBackend(runnerOptions.kernelBackend)) {
+  if (runnerOptions.kernelBackend == "cutlass") {
     printUnsupportedIntegratedBackend(runnerOptions.kernelBackend);
     return 2;
+  }
+
+  if (!isGeneratedNvvmBackend(runnerOptions.kernelBackend)) {
+    if (runnerOptions.problemOperation != "linear_relu") {
+      llvm::errs() << "kernel backend '" << runnerOptions.kernelBackend
+                   << "' only supports --problem-operation=linear_relu\n";
+      return 1;
+    }
+
+    IntegratedKernelRuntime runtime(MINI_CUDA_RUNTIME_WRAPPERS_PATH);
+    PerfRuntimeHooks perfHooks(MINI_CUDA_RUNTIME_WRAPPERS_PATH);
+    if (!runtime.available() || !perfHooks.available()) {
+      llvm::errs() << "CUDA integrated runtime hooks are unavailable; expected "
+                      "MiniCudaRuntimeWrappers at '"
+                   << MINI_CUDA_RUNTIME_WRAPPERS_PATH << "'\n";
+      return 1;
+    }
+
+    double prepareMs = 0.0;
+    void *problem = nullptr;
+    {
+      NvtxRange range("prepare_inputs");
+      auto start = std::chrono::steady_clock::now();
+      problem = runtime.create(runnerOptions.problemM, runnerOptions.problemN,
+                               runnerOptions.problemK,
+                               runnerOptions.dataProfile);
+      auto end = std::chrono::steady_clock::now();
+      prepareMs =
+          std::chrono::duration<double, std::milli>(end - start).count();
+    }
+    if (!problem) {
+      llvm::errs() << "Failed to create integrated linear_relu CUDA problem\n";
+      return 1;
+    }
+
+    std::vector<double> timingsMs;
+    std::vector<double> kernelTimingsMs;
+    timingsMs.reserve(static_cast<size_t>(runnerOptions.repeat));
+    kernelTimingsMs.reserve(static_cast<size_t>(runnerOptions.repeat));
+
+    {
+      NvtxRange backendRange(runnerOptions.kernelBackend == "cublas"
+                                 ? "backend/cublas"
+                                 : "backend/cuda_hand");
+      {
+        NvtxRange range("warmup");
+        for (int iteration = 0; iteration < runnerOptions.warmup; ++iteration) {
+          perfHooks.reset();
+          runtime.run(problem, runnerOptions.kernelBackend);
+        }
+      }
+
+      {
+        NvtxRange range("benchmark");
+        for (int iteration = 0; iteration < runnerOptions.repeat; ++iteration) {
+          perfHooks.reset();
+          auto start = std::chrono::steady_clock::now();
+          runtime.run(problem, runnerOptions.kernelBackend);
+          auto end = std::chrono::steady_clock::now();
+          std::chrono::duration<double, std::milli> elapsed = end - start;
+          timingsMs.push_back(elapsed.count());
+          auto kernelTiming = perfHooks.collectSequence();
+          if (kernelTiming.count > 0)
+            kernelTimingsMs.push_back(kernelTiming.totalMs);
+        }
+      }
+    }
+
+    float result = 0.0f;
+    {
+      NvtxRange range("verify");
+      result = runtime.copyFirstResult(problem);
+    }
+    runtime.destroy(problem);
+
+    auto endToEndEnd = std::chrono::steady_clock::now();
+    double endToEndMs =
+        std::chrono::duration<double, std::milli>(endToEndEnd - endToEndStart)
+            .count();
+    if (failed(writeJsonReport(runnerOptions, timingsMs, kernelTimingsMs,
+                               /*hasResult=*/true, result, /*compileMs=*/0.0,
+                               /*engineCreateMs=*/0.0, prepareMs,
+                               endToEndMs)))
+      return 1;
+    llvm::outs() << result << "\n";
+    return 0;
   }
 
   llvm::InitializeNativeTarget();
@@ -671,7 +857,7 @@ int main(int argc, char **argv) {
             .count();
     if (failed(writeJsonReport(runnerOptions, timingsMs, kernelTimingsMs,
                                hasResult, result, compileMs, engineCreateMs,
-                               endToEndMs)))
+                               /*prepareMs=*/0.0, endToEndMs)))
       return 1;
   }
 

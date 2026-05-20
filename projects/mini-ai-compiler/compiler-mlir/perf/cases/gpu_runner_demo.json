@@ -27,41 +27,15 @@
     },
     {
       "name": "cuda_hand",
-      "kind": "external",
-      "enabled": false,
-      "run_once": true,
-      "command": [
-        "./build/bin/mini-compiler-kernel-bench",
-        "--backend",
-        "cuda_hand",
-        "--case",
-        "{case}",
-        "--warmup",
-        "{warmup}",
-        "--repeat",
-        "{repeat}",
-        "--json-output",
-        "{json_output}"
-      ]
+      "kind": "mlir_gpu_runner",
+      "kernel_backend": "cuda_hand",
+      "enabled": true
     },
     {
       "name": "cublas",
-      "kind": "external",
-      "enabled": false,
-      "run_once": true,
-      "command": [
-        "./build/bin/mini-compiler-kernel-bench",
-        "--backend",
-        "cublas",
-        "--case",
-        "{case}",
-        "--warmup",
-        "{warmup}",
-        "--repeat",
-        "{repeat}",
-        "--json-output",
-        "{json_output}"
-      ]
+      "kind": "mlir_gpu_runner",
+      "kernel_backend": "cublas",
+      "enabled": true
     }
   ]
 }

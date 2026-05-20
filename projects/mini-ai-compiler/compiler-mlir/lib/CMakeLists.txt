@@ -10,6 +10,7 @@ add_mlir_library(MiniCompilerMLIR
   LINK_LIBS PUBLIC
   MLIRAffineDialect
   MLIRArithDialect
+  MLIRBufferizationDialect
   MLIRFuncDialect
   MLIRGPUDialect
   MLIRGPUTransforms

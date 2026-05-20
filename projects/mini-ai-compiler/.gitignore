@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
+.venv/
 artifacts/
 compiler-mlir/build/
+compiler-mlir/compile_commands.json

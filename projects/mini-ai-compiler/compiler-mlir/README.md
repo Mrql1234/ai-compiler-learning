@@ -244,15 +244,41 @@ GPU 性能监控入口文件：
 - `scripts/perf_profile_nsys.sh`：Nsight Systems 包装脚本
 - `scripts/perf_profile_ncu.sh`：Nsight Compute 包装脚本
 - `scripts/perf_validate_cloud.sh`：云 GPU 上的一键构建、运行三 backend、按 `kernel_ms` 对比的验证入口
+- `lib/GpuPasses.cpp`：包含 `mini-gpu-runtime-call-lowering`，用于把 `mini.fused_linear_relu` 降到显式 GPU runtime `func.call`
+- `test/gpu_runtime_call_lowering.mlir`：验证 `cuda_hand` / `cublas` runtime-call lowering 的 lit smoke test
+- `runtime/MiniCudaKernelRuntime.cu`：提供 runner integrated path 和 executable memref runtime-call path 使用的 CUDA/cuBLAS ABI
+- `tools/mini-compiler-runner.cpp`：支持 `--lowering-pipeline=...`，可直接执行 runtime-call lowering pipeline
 - `tools/mini-compiler-kernel-bench.cpp`：手写 CUDA / cuBLAS benchmark 入口
 
-性能监控方案的目标口径是对比三条路线最终 kernel 的 `kernel_ms`，不把 lowering、JIT engine 创建、输入构造、显存分配、H2D/D2H 拷贝计入主指标。当前已归档 A10 数据仍是 v0 工程快照：`mlir_nvvm` 走编译器 runner，`cuda_hand` / `cublas` 走外部 benchmark；后续会演进为三条路线都由编译器 backend selection 分叉并调用统一 runtime ABI。
+性能监控方案的目标口径是对比三条路线最终 kernel 的 `kernel_ms`，不把 lowering、JIT engine 创建、输入构造、显存分配、H2D/D2H 拷贝计入主指标。`mlir_nvvm` 走编译器 lowering 后的 runner 路线；`cuda_hand` / `cublas` 现在也可由同一个 `mini-compiler-gpu-runner` 通过 backend selection 调用统一 runtime ABI。
 
 当前 harness 已支持新的 metric schema：`mini-compiler-kernel-bench` 输出 CUDA event 口径的 `metrics.kernel_ms` 和 host 侧 `metrics.invoke_ms`；`mini-compiler-gpu-runner` 输出 `metrics.kernel_ms`、`metrics.invoke_ms`、`compile_ms`、`engine_create_ms`、`end_to_end_ms`，其中 `mlir_nvvm` 的 `kernel_ms` 来自 `mgpuLaunchKernel` 内的 CUDA driver event accumulator。`perf_compare.py` 默认按 `kernel_ms` 对比，查看旧归档 v0 数据时使用 `--metric latency_ms`。
 
-`mini-compiler-gpu-runner` 现在提供稳定的 backend selection 入口：`--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass`。当前只有 `generated_nvvm` / `mlir_nvvm` 是编译器集成可执行路线；`cuda_hand` / `cublas` / `cutlass` 会返回明确的未实现错误，等待后续 runtime-call lowering 接入。
+`mini-compiler-gpu-runner` 现在提供稳定的 backend selection 入口：`--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass`。当前 `generated_nvvm` / `mlir_nvvm`、`cuda_hand`、`cublas` 是可执行路线；`cutlass` 会返回明确的未实现错误。
 
-编译器集成路线预留的 CUDA runtime ABI 位于 `runtime/MiniCudaKernelRuntime.cu`，当前提供 `mini_cuda_linear_relu_f32` 和 `mini_cublas_linear_relu_f32`。这些函数是后续 `mini.fused_linear_relu -> runtime call` lowering pass 的目标入口，CUDA event timing 会写回 `CudaRuntimeWrappers.cpp` 的 perf accumulator。
+编译器集成路线使用的 CUDA runtime ABI 位于 `runtime/MiniCudaKernelRuntime.cu`，当前提供 `mini_cuda_linear_relu_f32` 和 `mini_cublas_linear_relu_f32`。`mini-gpu-runtime-call-lowering` 已经能把静态 shape 的 `mini.fused_linear_relu` 降到 `mini_cuda_linear_relu_f32_memref` / `mini_cublas_linear_relu_f32_memref` 形式的显式 `func.call`，并可通过 `mini-gpu-runtime-call-lowering-pipeline` 降到 LLVM 后由 `mini-compiler-runner` 执行。
+
+查看 runtime-call lowering IR：
+
+```bash
+./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
+  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cuda_hand})'
+
+./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
+  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cublas})'
+```
+
+执行 runtime-call lowering pipeline：
+
+```bash
+./build/bin/mini-compiler-runner test/gpu_runner_demo.mlir \
+  --lowering-pipeline='mini-gpu-runtime-call-lowering-pipeline{backend=cuda_hand}' \
+  --shared-libs=build/lib/libMiniCudaRuntimeWrappers.so
+
+./build/bin/mini-compiler-runner test/gpu_runner_demo.mlir \
+  --lowering-pipeline='mini-gpu-runtime-call-lowering-pipeline{backend=cublas}' \
+  --shared-libs=build/lib/libMiniCudaRuntimeWrappers.so
+```
 
 本地 CPU-only smoke check 可用 dummy external backend 验证 harness 本身：
 

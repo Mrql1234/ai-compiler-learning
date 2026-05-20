@@ -283,6 +283,17 @@ def run_mlir_backend(
         f"--json-output={json_path}",
         f"--dump-lowered={lowered_path}",
     ]
+    problem = case.get("problem", {})
+    if problem:
+        command.extend(
+            [
+                f"--problem-operation={problem.get('operation', 'linear_relu')}",
+                f"--data-profile={problem.get('data_profile', 'deterministic')}",
+                f"--m={problem.get('m', 2)}",
+                f"--n={problem.get('n', 8)}",
+                f"--k={problem.get('k', 4)}",
+            ]
+        )
     if backend.get("quantized", case.get("quantized", False)):
         command.append("--quantized")
     ptxas_options = backend.get("ptxas_cmd_options", args.ptxas_cmd_options)
