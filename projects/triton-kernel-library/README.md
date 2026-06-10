@@ -59,6 +59,29 @@ python -m kernels.layernorm --test
 python -m kernels.gelu --benchmark
 ```
 
+## 📘 Triton Learning 文档
+
+当前仓库里额外维护了一份面向 `AI 编译器 / 编译后端 / kernel compiler` 岗位准备的学习型作品集文档：
+
+- [triton-learning/TRITON_OPERATOR_PORTFOLIO.md](/home/ql/code/ai-compiler-learning/projects/triton-kernel-library/triton-learning/TRITON_OPERATOR_PORTFOLIO.md)
+
+这份文档聚焦 5 个核心算子：
+
+- `triton_matmul.py`
+- `triton_fused_linear_relu.py`
+- `triton_softmax.py`
+- `triton_layernorm.py`
+- `triton_flash_attention_simplified.py`
+
+文档中已经记录：
+
+- 推荐目录布局
+- 建议入口文件
+- 建议运行命令
+- 正确性验证方式
+- benchmark 方法
+- 与编译器优化的关系
+
 ## 📁 项目结构
 
 ```
@@ -79,6 +102,8 @@ triton-kernel-library/
 │   ├── benchmark_all.py     # 全量 benchmark
 │   ├── benchmark_single.py  # 单算子 benchmark
 │   └── results/             # 结果数据
+├── triton-learning/          # 学习型作品集文档与实验规划
+│   └── TRITON_OPERATOR_PORTFOLIO.md
 └── docs/                     # 技术文档
     ├── optimization_guide.md  # 优化指南
     └── profiling.md          # 性能分析方法
