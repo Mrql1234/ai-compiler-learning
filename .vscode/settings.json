@@ -10,11 +10,11 @@
     "CMAKE_CXX_COMPILER": "clang++-15",
     "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
   },
-  "clangd.path": "/home/ql/toolchains/llvm_clang_static_analyzer/build/bin/clangd",
+  "clangd.path": "/usr/bin/clangd-15",
   "clangd.arguments": [
     "--background-index",
     "--header-insertion=never",
-    "--query-driver=/usr/local/cuda/bin/nvcc,/home/ql/toolchains/llvm_clang_static_analyzer/build/bin/clang++,/home/ql/toolchains/llvm_clang_static_analyzer/build/bin/clang,/usr/bin/c++,/usr/bin/g++,/usr/bin/clang++,/usr/bin/cc,/usr/bin/clang"
+    "--query-driver=/usr/local/cuda/bin/nvcc,/usr/bin/c++,/usr/bin/g++,/usr/bin/clang++,/usr/bin/cc,/usr/bin/clang"
   ],
   "C_Cpp.intelliSenseEngine": "disabled",
   "files.associations": {

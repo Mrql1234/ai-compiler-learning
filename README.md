@@ -3,6 +3,13 @@
 > AI 编译器学习笔记 - Java 背景入门  
 > 学习路线参考：[ai-compiler-study-guide.md](../ai-compiler-study-guide.md)
 
+## 面试准备文档
+
+- 国内 AI 编译器岗位 100 道高频面试题：
+  - 文档入口：[docs/ai-compiler-interview-100-questions.md](./docs/ai-compiler-interview-100-questions.md)
+  - 入口文件：`docs/ai-compiler-interview-100-questions.md`
+  - 阅读命令：`less docs/ai-compiler-interview-100-questions.md`
+
 ## 📚 学习进度
 
 - [x] 阶段 1：AI 编译器入门（TVM、MLIR、PyTorch 2.x）— 笔记 01-04 完成 ✅

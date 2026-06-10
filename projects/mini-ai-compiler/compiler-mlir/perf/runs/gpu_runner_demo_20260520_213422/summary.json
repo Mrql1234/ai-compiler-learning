@@ -1,0 +1,38 @@
+{
+  "case": {
+    "name": "gpu_runner_demo",
+    "description": "Small runnable GPU demo used as the first compiler-generated kernel perf case.",
+    "input": "test/gpu_runner_demo.mlir",
+    "entry_function": "run",
+    "result_type": "f32",
+    "problem": {
+      "operation": "linear_relu",
+      "data_profile": "gpu_runner_demo",
+      "m": 2,
+      "n": 8,
+      "k": 4
+    },
+    "tolerance": {
+      "abs": 1e-05,
+      "rel": 1e-05
+    }
+  },
+  "results": [
+    {
+      "backend": "cuda_hand",
+      "kind": "external",
+      "returncode": 1,
+      "result": null,
+      "correct": null,
+      "latency_ms": {
+        "min": null,
+        "mean": null,
+        "median": null,
+        "max": null
+      },
+      "metrics": {},
+      "json_path": "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/runs/gpu_runner_demo_20260520_213422/cuda_hand.json",
+      "artifacts": {}
+    }
+  ]
+}

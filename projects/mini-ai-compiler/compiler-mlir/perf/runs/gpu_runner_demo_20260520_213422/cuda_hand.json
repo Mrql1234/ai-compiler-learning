@@ -1,0 +1,21 @@
+{
+  "backend": "cuda_hand",
+  "kind": "external",
+  "command": [
+    "printf"
+  ],
+  "returncode": 1,
+  "stdout": "",
+  "stderr": "printf: missing operand\nTry 'printf --help' for more information.\n",
+  "result": null,
+  "correct": null,
+  "latency_ms": {
+    "min": null,
+    "mean": null,
+    "median": null,
+    "max": null
+  },
+  "timings_ms": [],
+  "metrics": {},
+  "artifacts": {}
+}
