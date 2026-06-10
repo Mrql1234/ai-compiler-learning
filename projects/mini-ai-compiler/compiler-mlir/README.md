@@ -48,8 +48,6 @@ Notes:
 
 - Multi-backend lowering roadmap:
   - `LOWERING_ROADMAP.md`
-- 大模型算子与 Triton/GPU 路线设计:
-  - `LARGE_MODEL_GPU_DESIGN.md`
 - Local dev + cloud A10 workflow:
   - `GPU_A10_WORKFLOW.md`
 - GPU performance monitoring plan:
@@ -238,7 +236,6 @@ python3 ./scripts/benchmark_compare.py test/gpu_runner_demo.mlir --skip-gpu
 GPU 性能监控入口文件：
 
 - `PERF_MONITORING_PLAN.md`：完整 GPU 性能监控方案、入口文件和命令说明
-- `LARGE_MODEL_GPU_DESIGN.md`：大模型常用算子、动态 shape、KV cache、Triton/GPU 路线设计
 - `perf/README.md`：`perf/` 目录的快速入口说明
 - `perf/cases/gpu_runner_demo.json`：小型 demo case，包含 `mlir_nvvm`、`cuda_hand`、`cublas`
 - `perf/cases/linear_relu_f32_m1024_n1024_k1024.json`：大型 `linear + relu` case
@@ -260,36 +257,6 @@ GPU 性能监控入口文件：
 `mini-compiler-gpu-runner` 现在提供稳定的 backend selection 入口：`--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass`。当前 `generated_nvvm` / `mlir_nvvm`、`cuda_hand`、`cublas` 是可执行路线；`cutlass` 会返回明确的未实现错误。
 
 编译器集成路线使用的 CUDA runtime ABI 位于 `runtime/MiniCudaKernelRuntime.cu`，当前提供 `mini_cuda_linear_relu_f32` 和 `mini_cublas_linear_relu_f32`。`mini-gpu-runtime-call-lowering` 已经能把静态 shape 的 `mini.fused_linear_relu` 降到 `mini_cuda_linear_relu_f32_memref` / `mini_cublas_linear_relu_f32_memref` 形式的显式 `func.call`，并可通过 `mini-gpu-runtime-call-lowering-pipeline` 降到 LLVM 后由 `mini-compiler-runner` 执行。
-
-大模型算子与 Triton/GPU 路线入口文件：
-
-- `LARGE_MODEL_GPU_DESIGN.md`：当前最直接的设计入口，说明为什么项目下一步应该从 `decoder block / attention block / mlp block` 入手，而不是直接跳到完整大模型
-- `LOWERING_ROADMAP.md`：配合阅读的 lowering 分层文档，说明 `mini -> 标准 dialect -> backend split` 的总体结构
-- `PERF_MONITORING_PLAN.md`：配合阅读的 profiling 文档，说明后续 block 级 workload 如何继续复用 `kernel_ms` 对比体系
-
-当前建议先用下面这些命令作为后续扩展的起点：
-
-```bash
-./build/bin/mini-compiler-opt --mini-gpu-lowering test/gpu_prep.mlir
-
-./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
-  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cublas})'
-
-./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
-  --kernel-backend=generated_nvvm
-
-python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
-  --backend mlir_nvvm \
-  --backend cuda_hand \
-  --backend cublas \
-  --metric kernel_ms
-```
-
-上面这些入口目前仍然围绕 `linear_relu` 小型 case，但它们已经对应了新设计文档里未来会继续扩展的三类核心能力：
-
-- 公共 GPU lowering
-- runtime-call / library backend 分叉
-- 统一性能对比与 profiling
 
 查看 runtime-call lowering IR：
 
