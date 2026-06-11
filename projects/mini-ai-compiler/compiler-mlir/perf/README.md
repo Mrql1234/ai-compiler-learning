@@ -1,68 +1,78 @@
-# compiler-mlir 性能监控入口
+# compiler-mlir 性能入口
 
-`perf/` 目录保存可重复的性能 case、运行结果和 Nsight 报告。当前已归档一组 A10 云 GPU 上的真实执行数据，另一台机器拉取仓库后可以直接查看 JSON、文本摘要和 Nsight report 文件，不需要重新运行脚本。
+`perf/` 目录用于保存性能 case、运行结果、Nsight 报告和后续 Triton 迭代产物。
+
+这次文档调整后，性能工作的重点不再是长期维护“`mlir_nvvm` / 手写 CUDA / `cublas` 三路线并行对比”，而是：
+
+- 以 Triton 作为下一阶段主优化路线
+- 先围绕 `fused_linear_relu` 做连续多轮迭代
+- 再把同一套方法迁移到 `matmul`
+
+详细设计请先看：
+
+- [`PERF_MONITORING_PLAN.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/PERF_MONITORING_PLAN.md)
+- [`TRITON_PERF_TASKS.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/TRITON_PERF_TASKS.md)
+- [`LARGE_MODEL_GPU_DESIGN.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/LARGE_MODEL_GPU_DESIGN.md)
+- [`LOWERING_ROADMAP.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/LOWERING_ROADMAP.md)
+- [`CLOUD_TRITON_A10_WORKFLOW.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/CLOUD_TRITON_A10_WORKFLOW.md)
+
+## 当前状态
+
+当前 `compiler-mlir` 里已经可执行的 GPU 参考路线仍然是：
+
+- `generated_nvvm` / `mlir_nvvm`
+- `cublas`
+- `cuda_hand`
+
+其中：
+
+- `generated_nvvm` 用于通用 MLIR GPU baseline
+- `cublas` 用于库参考基线
+- `cuda_hand` 只保留为历史教学/对照实现，不再作为新的长期主线
+
+需要明确的是：
+
+- `compiler-mlir` 的 Triton backend 目前还是**下一阶段设计目标**
+- 现有 `perf/` 里的归档结果主要还是旧的三路线快照
 
 ## 入口文件
 
 - `perf/cases/gpu_runner_demo.json`
-  - 小型 `linear + relu` demo
-  - backend：`mlir_nvvm`、`cuda_hand`、`cublas`
+  - 当前小型参考 case
 - `perf/cases/linear_relu_f32_m1024_n1024_k1024.json`
-  - 大型 `linear + relu` case
-  - backend：`cuda_hand`、`cublas`
+  - 当前大 shape 参考 case
 - `scripts/perf_run.py`
-  - 统一运行入口
-  - 生成每个 backend 的 JSON 和 `summary.json`
+  - 当前统一运行入口
 - `scripts/perf_compare.py`
-  - 读取 `summary.json`
-  - 输出 correctness、指定 metric 和 gap
+  - 当前结果汇总入口
 - `scripts/perf_profile_nsys.sh`
-  - Nsight Systems 包装入口
+  - Nsight Systems 入口
 - `scripts/perf_profile_ncu.sh`
-  - Nsight Compute 包装入口
-- `scripts/perf_validate_cloud.sh`
-  - 云 GPU 上的一键构建、运行三 backend、按 `kernel_ms` 对比的验证入口
-- `lib/GpuPasses.cpp`
-  - 提供 `mini-gpu-runtime-call-lowering`，把 `mini.fused_linear_relu` 降到显式 GPU runtime `func.call`
-- `test/gpu_runtime_call_lowering.mlir`
-  - `cuda_hand` / `cublas` runtime-call lowering 的 lit smoke test
-- `runtime/MiniCudaKernelRuntime.cu`
-  - 提供 runner integrated path 和 executable memref runtime-call path 使用的 CUDA/cuBLAS ABI
-- `tools/mini-compiler-runner.cpp`
-  - 支持 `--lowering-pipeline=...`，可直接执行 runtime-call lowering pipeline
-- `tools/mini-compiler-kernel-bench.cpp`
-  - 手写 CUDA 和 cuBLAS benchmark 入口
-- `tools/KernelBenchCuda.cu`
-  - CUDA kernel 和 cuBLAS 调用实现
+  - Nsight Compute 入口
+- `scripts/triton_linear_relu_bench.py`
+  - Triton `fused_linear_relu` 微基线入口
+- `scripts/triton_perf_sweep.py`
+  - Triton 参数 sweep 入口
+- `scripts/triton_profile_iter.py`
+  - Triton profile 包装入口
+- `perf/cases/triton_linear_relu_f32_m128_n128_k128.json`
+  - Triton 小型 smoke case
+- `perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json`
+  - Triton 主 benchmark case
+- `perf/configs/triton_linear_relu_a10.json`
+  - Triton A10 配置
+- `perf/configs/README.md`
+  - Triton config 目录说明
+- `perf/notes/README.md`
+  - Triton 迭代记录目录说明
+- `perf/notes/triton_linear_relu_iterations.md`
+  - Triton `fused_linear_relu` 迭代记录模板
+- `perf/CLOUD_TRITON_A10_WORKFLOW.md`
+  - 云端 A10 必做事项与命令
 
-## 已归档数据
+## 当前可执行命令
 
-小型 demo：
-
-- `perf/runs/gpu_runner_demo_a10_20260511/summary.json`
-- `perf/runs/gpu_runner_demo_a10_20260511/compare.txt`
-- `perf/runs/gpu_runner_demo_a10_20260511/mlir_nvvm.json`
-- `perf/runs/gpu_runner_demo_a10_20260511/cuda_hand.json`
-- `perf/runs/gpu_runner_demo_a10_20260511/cublas.json`
-- `perf/runs/gpu_runner_demo_a10_20260511/mlir_nvvm_lowered.mlir`
-
-大型 case：
-
-- `perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json`
-- `perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/compare.txt`
-- `perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/cuda_hand.json`
-- `perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/cublas.json`
-
-Nsight 报告：
-
-- `perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys.nsys-rep`
-- `perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys.sqlite`
-- `perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys_nvtx_summary.txt`
-- `perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu.ncu-rep`
-- `perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu_details.txt`
-- `perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu_session.txt`
-
-## 构建命令
+构建：
 
 ```bash
 cmake -S . -B build \
@@ -73,165 +83,112 @@ cmake -S . -B build \
 cmake --build build -j2
 ```
 
-## 运行命令
-
-运行 `gpu_runner_demo` 的三 backend 对比：
+查看当前 GPU lowering：
 
 ```bash
-./scripts/perf_validate_cloud.sh
+./build/bin/mini-compiler-opt --mini-gpu-lowering test/gpu_prep.mlir
 ```
 
-等价的手动命令：
+运行当前 `generated_nvvm` 基线：
+
+```bash
+./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
+  --kernel-backend=generated_nvvm \
+  --warmup=10 \
+  --repeat=50
+```
+
+运行当前参考对比：
 
 ```bash
 python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
   --backend mlir_nvvm \
-  --backend cuda_hand \
   --backend cublas \
   --metric kernel_ms \
   --warmup 10 \
   --repeat 50 \
-  --run-dir perf/runs/gpu_runner_demo_a10_20260511
+  --run-dir perf/runs/gpu_runner_demo_reference
 ```
-
-查看对比结果：
 
 ```bash
 python3 ./scripts/perf_compare.py \
   --metric kernel_ms \
-  perf/runs/gpu_runner_demo_a10_20260511/summary.json
+  perf/runs/gpu_runner_demo_reference/summary.json
 ```
-
-运行大型 `linear + relu` case：
-
-```bash
-python3 ./scripts/perf_run.py \
-  perf/cases/linear_relu_f32_m1024_n1024_k1024.json \
-  --metric kernel_ms \
-  --warmup 10 \
-  --repeat 50 \
-  --run-dir perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511
-```
-
-查看大型 case 对比结果：
-
-```bash
-python3 ./scripts/perf_compare.py \
-  --metric kernel_ms \
-  perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json
-```
-
-新生成的 CUDA/cuBLAS benchmark JSON 会包含 `metrics.kernel_ms` 和 `metrics.invoke_ms`。`mini-compiler-gpu-runner` 在 CUDA runtime wrapper 可用时会为 `mlir_nvvm`、`cuda_hand`、`cublas` 输出 `metrics.kernel_ms`。`kernel_ms` 使用 CUDA event 计时，是默认公平对比指标；旧归档结果只有 v0 `latency_ms`，所以查看旧结果时需要显式传 `--metric latency_ms`。
-
-当前 compiler-integrated 手写 CUDA / 库路线已经通过 `mini-compiler-gpu-runner --kernel-backend=cuda_hand|cublas` 调用 `runtime/MiniCudaKernelRuntime.cu` 中的 `mini_cuda_linear_relu_f32` 和 `mini_cublas_linear_relu_f32`。IR 层也已提供 `mini-gpu-runtime-call-lowering`，可以把静态 shape 的 `mini.fused_linear_relu` 降到 `mini_cuda_linear_relu_f32_memref` / `mini_cublas_linear_relu_f32_memref` 形式的显式 `func.call`，并通过 `mini-gpu-runtime-call-lowering-pipeline` 降到 LLVM 后执行。
-
-查看 runtime-call lowering IR：
-
-```bash
-./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
-  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cuda_hand})'
-
-./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
-  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cublas})'
-```
-
-执行 runtime-call lowering pipeline：
-
-```bash
-./build/bin/mini-compiler-runner test/gpu_runner_demo.mlir \
-  --lowering-pipeline='mini-gpu-runtime-call-lowering-pipeline{backend=cuda_hand}' \
-  --shared-libs=build/lib/libMiniCudaRuntimeWrappers.so
-
-./build/bin/mini-compiler-runner test/gpu_runner_demo.mlir \
-  --lowering-pipeline='mini-gpu-runtime-call-lowering-pipeline{backend=cublas}' \
-  --shared-libs=build/lib/libMiniCudaRuntimeWrappers.so
-```
-
-直接运行 benchmark binary：
-
-```bash
-./build/bin/mini-compiler-kernel-bench \
-  --backend cuda_hand \
-  --case perf/cases/gpu_runner_demo.json \
-  --warmup 10 \
-  --repeat 50 \
-  --json-output /tmp/cuda_hand.json
-
-./build/bin/mini-compiler-kernel-bench \
-  --backend cublas \
-  --case perf/cases/linear_relu_f32_m1024_n1024_k1024.json \
-  --warmup 10 \
-  --repeat 50 \
-  --json-output /tmp/cublas.json
-```
-
-## Nsight 命令
 
 采集 Nsight Systems：
 
 ```bash
 ./scripts/perf_profile_nsys.sh \
-  perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys \
+  perf/profiles/gpu_runner_demo_mlir_nvvm_nsys \
   ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
     --warmup=1 \
     --repeat=2 \
     --cubin-format=fatbin
 ```
 
-导出 NVTX 摘要：
+## Triton 新入口
+
+Triton 微基线：
 
 ```bash
-nsys stats --force-export=true \
-  --report nvtx_pushpop_sum \
-  perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys.nsys-rep \
-  | tee perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys_nvtx_summary.txt
+python3 ./scripts/triton_linear_relu_bench.py \
+  --case perf/cases/triton_linear_relu_f32_m128_n128_k128.json \
+  --config perf/configs/triton_linear_relu_a10.json \
+  --config-source default \
+  --warmup 5 \
+  --repeat 20 \
+  --json-output perf/runs/triton_iterations/smoke_m128.json
 ```
 
-采集 Nsight Compute：
+Triton sweep：
 
 ```bash
-./scripts/perf_profile_ncu.sh \
-  perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu \
-  ./build/bin/mini-compiler-kernel-bench \
-    --backend cuda_hand \
-    --case perf/cases/gpu_runner_demo.json \
-    --warmup 1 \
-    --repeat 1
+python3 ./scripts/triton_perf_sweep.py \
+  --case perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json \
+  --config perf/configs/triton_linear_relu_a10.json \
+  --warmup 10 \
+  --repeat 50 \
+  --out perf/runs/triton_iterations/iter_01_tile
 ```
 
-导出 Nsight Compute 文本报告：
+Triton profile：
 
 ```bash
-ncu --import perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu.ncu-rep \
-  --page details \
-  | tee perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu_details.txt
-
-ncu --import perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu.ncu-rep \
-  --page session \
-  | tee perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu_session.txt
+python3 ./scripts/triton_profile_iter.py \
+  --case perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json \
+  --config perf/configs/triton_linear_relu_a10.json \
+  --config-source profile_target \
+  --emit-nvtx \
+  --tag iter_02_pipeline \
+  --out perf/profiles/triton_iterations/iter_02_pipeline
 ```
 
-## 当前 A10 结果
+## 已归档数据
 
-`gpu_runner_demo`：
+当前仓库已保留一批 A10 真实运行结果，主要用于：
 
-```text
-case: gpu_runner_demo
-baseline: cublas
-backend        correct   median ms   mean ms    gap
--------------  --------  ----------  --------  ------
-mlir_nvvm      yes            0.479     0.607  40.69x
-cuda_hand      yes            0.006     0.006   0.54x
-cublas         yes            0.012     0.012   1.00x
-```
+- 回看旧的参考基线
+- 对照后续 Triton 方案的阶段性提升
 
-`linear_relu_f32_m1024_n1024_k1024`：
+主要归档包括：
 
-```text
-case: linear_relu_f32_m1024_n1024_k1024
-baseline: cublas
-backend        correct   median ms   mean ms    gap
--------------  --------  ----------  --------  ------
-cuda_hand      yes            5.109     5.109  30.63x
-cublas         yes            0.167     0.167   1.00x
-```
+- `perf/runs/gpu_runner_demo_a10_20260511/`
+- `perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/`
+- `perf/profiles/a10_20260511/`
+
+## 下一阶段应新增的内容
+
+按新的 Triton 主线，后续建议补齐：
+
+- Triton 微基线运行入口
+- Triton 参数 sweep 入口
+- Triton profile 归档目录
+- Triton config 文件
+- `fused_linear_relu` 与 `matmul` 的 A10 专项 case
+
+这些内容目前还没有在 `compiler-mlir` 中实装，后续实现时应同步更新本目录 README。
+
+如果要按任务顺序推进，请直接看：
+
+- [`TRITON_PERF_TASKS.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/TRITON_PERF_TASKS.md)

@@ -1,0 +1,22 @@
+{
+  "name": "triton_linear_relu_f32_m128_n128_k128",
+  "description": "Triton fused linear+relu smoke case for quick correctness and regression checks.",
+  "operation": "fused_linear_relu",
+  "dtype": "float32",
+  "problem": {
+    "m": 128,
+    "n": 128,
+    "k": 128
+  },
+  "layout": {
+    "input": "row_major_mk",
+    "weight": "row_major_nk",
+    "output": "row_major_mn"
+  },
+  "data_profile": "deterministic",
+  "seed": 0,
+  "tolerance": {
+    "abs": 0.0001,
+    "rel": 0.0001
+  }
+}

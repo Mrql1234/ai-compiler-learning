@@ -26,8 +26,9 @@ It can now:
 - lower `mini.*` ops into `gpu.launch_func` / `gpu.module`
 - lower the GPU path further into NVVM binaries
 - JIT-run a small lowered GPU demo locally and return the computed result
-- collect repeatable GPU performance runs for compiler-generated, hand CUDA,
-  and third-party library kernel baselines
+- collect repeatable GPU performance runs for compiler-generated, legacy hand
+  CUDA, and third-party library kernel baselines while preparing for a
+  Triton-first iteration flow
 - run a first teaching-style weight-only INT8 quantization pass for `mini.linear` / `mini.fused_linear_relu`
 
 ## Configure
@@ -235,163 +236,83 @@ If you only want a CPU baseline on a machine without a working NVPTX/CUDA path:
 python3 ./scripts/benchmark_compare.py test/gpu_runner_demo.mlir --skip-gpu
 ```
 
-GPU 性能监控入口文件：
+GPU 性能与 Triton 迭代入口：
 
-- `PERF_MONITORING_PLAN.md`：完整 GPU 性能监控方案、入口文件和命令说明
-- `LARGE_MODEL_GPU_DESIGN.md`：大模型常用算子、动态 shape、KV cache、Triton/GPU 路线设计
-- `perf/README.md`：`perf/` 目录的快速入口说明
-- `perf/cases/gpu_runner_demo.json`：小型 demo case，包含 `mlir_nvvm`、`cuda_hand`、`cublas`
-- `perf/cases/linear_relu_f32_m1024_n1024_k1024.json`：大型 `linear + relu` case
-- `scripts/perf_run.py`：统一运行入口，生成 backend JSON 和 `summary.json`
-- `scripts/perf_compare.py`：对比 `summary.json`
-- `scripts/perf_profile_nsys.sh`：Nsight Systems 包装脚本
-- `scripts/perf_profile_ncu.sh`：Nsight Compute 包装脚本
-- `scripts/perf_validate_cloud.sh`：云 GPU 上的一键构建、运行三 backend、按 `kernel_ms` 对比的验证入口
-- `lib/GpuPasses.cpp`：包含 `mini-gpu-runtime-call-lowering`，用于把 `mini.fused_linear_relu` 降到显式 GPU runtime `func.call`
-- `test/gpu_runtime_call_lowering.mlir`：验证 `cuda_hand` / `cublas` runtime-call lowering 的 lit smoke test
-- `runtime/MiniCudaKernelRuntime.cu`：提供 runner integrated path 和 executable memref runtime-call path 使用的 CUDA/cuBLAS ABI
-- `tools/mini-compiler-runner.cpp`：支持 `--lowering-pipeline=...`，可直接执行 runtime-call lowering pipeline
-- `tools/mini-compiler-kernel-bench.cpp`：手写 CUDA / cuBLAS benchmark 入口
+- `PERF_MONITORING_PLAN.md`
+  - 新的 GPU 性能主文档
+  - 已改为以 Triton 为主线的性能迭代方案
+- `TRITON_PERF_TASKS.md`
+  - 从设计到实现的任务拆解文档
+- `LARGE_MODEL_GPU_DESIGN.md`
+  - Triton 在整体 GPU 后端体系里的角色说明
+- `LOWERING_ROADMAP.md`
+  - `mini -> 标准 dialect -> backend split` 的分层路线
+- `perf/README.md`
+  - `perf/` 目录的快速入口
 
-性能监控方案的目标口径是对比三条路线最终 kernel 的 `kernel_ms`，不把 lowering、JIT engine 创建、输入构造、显存分配、H2D/D2H 拷贝计入主指标。`mlir_nvvm` 走编译器 lowering 后的 runner 路线；`cuda_hand` / `cublas` 现在也可由同一个 `mini-compiler-gpu-runner` 通过 backend selection 调用统一 runtime ABI。
+这次调整后的设计结论是：
 
-当前 harness 已支持新的 metric schema：`mini-compiler-kernel-bench` 输出 CUDA event 口径的 `metrics.kernel_ms` 和 host 侧 `metrics.invoke_ms`；`mini-compiler-gpu-runner` 输出 `metrics.kernel_ms`、`metrics.invoke_ms`、`compile_ms`、`engine_create_ms`、`end_to_end_ms`，其中 `mlir_nvvm` 的 `kernel_ms` 来自 `mgpuLaunchKernel` 内的 CUDA driver event accumulator。`perf_compare.py` 默认按 `kernel_ms` 对比，查看旧归档 v0 数据时使用 `--metric latency_ms`。
+- 后续性能工作不再以手写 CUDA 作为长期主线
+- `compiler-mlir` 的下一阶段主优化路线应改为 Triton
+- 第一阶段优先做 `fused_linear_relu` 的 Triton 迭代优化
+- 第二阶段再把同样的方法迁移到 `matmul`
+- `generated_nvvm` 和 `cublas` 只保留为阶段性参考基线
 
-`mini-compiler-gpu-runner` 现在提供稳定的 backend selection 入口：`--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass`。当前 `generated_nvvm` / `mlir_nvvm`、`cuda_hand`、`cublas` 是可执行路线；`cutlass` 会返回明确的未实现错误。
+需要明确的是：
 
-编译器集成路线使用的 CUDA runtime ABI 位于 `runtime/MiniCudaKernelRuntime.cu`，当前提供 `mini_cuda_linear_relu_f32` 和 `mini_cublas_linear_relu_f32`。`mini-gpu-runtime-call-lowering` 已经能把静态 shape 的 `mini.fused_linear_relu` 降到 `mini_cuda_linear_relu_f32_memref` / `mini_cublas_linear_relu_f32_memref` 形式的显式 `func.call`，并可通过 `mini-gpu-runtime-call-lowering-pipeline` 降到 LLVM 后由 `mini-compiler-runner` 执行。
+- 当前 `compiler-mlir` 里真正可执行的 GPU 参考路线仍然是 `generated_nvvm` / `mlir_nvvm`、`cublas`、`cuda_hand`
+- Triton backend 在 `compiler-mlir` 中还属于下一阶段实现目标
+- 因此新的 `PERF_MONITORING_PLAN.md` 描述的是“下一阶段性能迭代设计”，不是已经全部落地的能力清单
 
-大模型算子与 Triton/GPU 路线入口文件：
-
-- `LARGE_MODEL_GPU_DESIGN.md`：当前最直接的设计入口，说明为什么项目下一步应该从 `decoder block / attention block / mlp block` 入手，而不是直接跳到完整大模型
-- `LOWERING_ROADMAP.md`：配合阅读的 lowering 分层文档，说明 `mini -> 标准 dialect -> backend split` 的总体结构
-- `PERF_MONITORING_PLAN.md`：配合阅读的 profiling 文档，说明后续 block 级 workload 如何继续复用 `kernel_ms` 对比体系
-
-当前建议先用下面这些命令作为后续扩展的起点：
+当前建议从下面这些入口继续推进：
 
 ```bash
 ./build/bin/mini-compiler-opt --mini-gpu-lowering test/gpu_prep.mlir
 
-./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
-  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cublas})'
-
 ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
-  --kernel-backend=generated_nvvm
+  --kernel-backend=generated_nvvm \
+  --warmup=10 \
+  --repeat=50
 
 python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
   --backend mlir_nvvm \
-  --backend cuda_hand \
   --backend cublas \
-  --metric kernel_ms
+  --metric kernel_ms \
+  --warmup 10 \
+  --repeat 50 \
+  --run-dir perf/runs/gpu_runner_demo_reference
+
+python3 ./scripts/perf_compare.py \
+  --metric kernel_ms \
+  perf/runs/gpu_runner_demo_reference/summary.json
 ```
 
-上面这些入口目前仍然围绕 `linear_relu` 小型 case，但它们已经对应了新设计文档里未来会继续扩展的三类核心能力：
-
-- 公共 GPU lowering
-- runtime-call / library backend 分叉
-- 统一性能对比与 profiling
-
-查看 runtime-call lowering IR：
+如果要看当前 `mini.fused_linear_relu` 的 runtime-call 分叉入口，可继续使用：
 
 ```bash
-./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
-  --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cuda_hand})'
-
 ./build/bin/mini-compiler-opt test/gpu_runtime_call_lowering.mlir \
   --pass-pipeline='builtin.module(func.func(mini-canonicalize,mini-fusion),mini-gpu-runtime-call-lowering{backend=cublas})'
 ```
 
-执行 runtime-call lowering pipeline：
-
-```bash
-./build/bin/mini-compiler-runner test/gpu_runner_demo.mlir \
-  --lowering-pipeline='mini-gpu-runtime-call-lowering-pipeline{backend=cuda_hand}' \
-  --shared-libs=build/lib/libMiniCudaRuntimeWrappers.so
-
-./build/bin/mini-compiler-runner test/gpu_runner_demo.mlir \
-  --lowering-pipeline='mini-gpu-runtime-call-lowering-pipeline{backend=cublas}' \
-  --shared-libs=build/lib/libMiniCudaRuntimeWrappers.so
-```
-
-本地 CPU-only smoke check 可用 dummy external backend 验证 harness 本身：
-
-```bash
-python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
-  --backend cuda_hand \
-  --backend-command cuda_hand='printf 3.5' \
-  --metric invoke_ms \
-  --warmup 1 \
-  --repeat 2 \
-  --run-dir /tmp/compiler-mlir-perf-smoke
-python3 ./scripts/perf_compare.py /tmp/compiler-mlir-perf-smoke/summary.json
-```
-
-在 A10 云 GPU 上运行小型 demo 的三 backend 对比：
-
-```bash
-./scripts/perf_validate_cloud.sh
-```
-
-等价的手动命令：
-
-```bash
-python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
-  --backend mlir_nvvm \
-  --backend cuda_hand \
-  --backend cublas \
-  --warmup 10 \
-  --repeat 50 \
-  --run-dir perf/runs/gpu_runner_demo_a10_20260511
-```
-
-查看已归档的小型 demo 对比结果：
-
-```bash
-python3 ./scripts/perf_compare.py \
-  --metric latency_ms \
-  perf/runs/gpu_runner_demo_a10_20260511/summary.json
-```
-
-在 A10 云 GPU 上运行大型 `linear + relu` 的 CUDA/cuBLAS 对比：
-
-```bash
-python3 ./scripts/perf_run.py \
-  perf/cases/linear_relu_f32_m1024_n1024_k1024.json \
-  --warmup 10 \
-  --repeat 50 \
-  --run-dir perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511
-```
-
-查看已归档的大型 case 对比结果：
-
-```bash
-python3 ./scripts/perf_compare.py \
-  --metric latency_ms \
-  perf/runs/linear_relu_f32_m1024_n1024_k1024_a10_20260511/summary.json
-```
-
-采集 `mlir_nvvm` 路线的 Nsight Systems 报告：
+如果要采集当前 baseline 的 Nsight Systems 报告，可使用：
 
 ```bash
 ./scripts/perf_profile_nsys.sh \
-  perf/profiles/a10_20260511/gpu_runner_demo_mlir_nvvm_nsys \
+  perf/profiles/gpu_runner_demo_mlir_nvvm_nsys \
   ./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir \
     --warmup=1 \
     --repeat=2 \
     --cubin-format=fatbin
 ```
 
-采集手写 CUDA kernel 的 Nsight Compute 报告：
+如果要继续推进 Triton 主线，推荐先按下面顺序阅读和执行：
 
-```bash
-./scripts/perf_profile_ncu.sh \
-  perf/profiles/a10_20260511/gpu_runner_demo_cuda_hand_ncu \
-  ./build/bin/mini-compiler-kernel-bench \
-    --backend cuda_hand \
-    --case perf/cases/gpu_runner_demo.json \
-    --warmup 1 \
-    --repeat 1
-```
+1. `PERF_MONITORING_PLAN.md`
+2. `TRITON_PERF_TASKS.md`
+3. `perf/README.md`
+4. `perf/configs/README.md`
+5. `perf/notes/README.md`
+6. `perf/CLOUD_TRITON_A10_WORKFLOW.md`
 
 Translate the LLVM dialect output into textual LLVM IR:
 
