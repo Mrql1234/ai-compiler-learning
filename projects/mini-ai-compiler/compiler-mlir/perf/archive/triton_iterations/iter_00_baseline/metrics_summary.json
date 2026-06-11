@@ -1,0 +1,17 @@
+{
+  "iteration_kind": "baseline",
+  "config": {
+    "BLOCK_M": 64,
+    "BLOCK_N": 64,
+    "BLOCK_K": 32,
+    "GROUP_M": 8,
+    "num_warps": 4,
+    "num_stages": 2
+  },
+  "case": "triton_linear_relu_f32_m1024_n1024_k1024",
+  "correct": true,
+  "kernel_ms_median": 0.4136959910392761,
+  "invoke_ms_median": 0.42972899998972025,
+  "effective_gflops": 5196.039716507476,
+  "effective_gbps": 30.425743233284063
+}

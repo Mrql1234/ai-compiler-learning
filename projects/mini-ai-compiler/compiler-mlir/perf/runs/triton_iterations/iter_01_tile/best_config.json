@@ -1,0 +1,15 @@
+{
+  "config": {
+    "BLOCK_M": 128,
+    "BLOCK_N": 128,
+    "BLOCK_K": 32,
+    "GROUP_M": 4,
+    "num_warps": 8,
+    "num_stages": 3
+  },
+  "config_tag": "bm128_bn128_bk32_gm4_w8_s3",
+  "kernel_ms_median": 0.2549760043621063,
+  "invoke_ms_median": 0.27083949998996104,
+  "correct": true,
+  "json_path": "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/runs/triton_iterations/iter_01_tile/115_bm128_bn128_bk32_gm4_w8_s3.json"
+}

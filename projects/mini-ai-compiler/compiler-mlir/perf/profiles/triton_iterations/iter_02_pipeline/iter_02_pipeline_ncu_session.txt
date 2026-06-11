@@ -1,0 +1,48 @@
+Launch Settings
+--------------------- ------------------------------------------------------------------------------------------------------------------------
+Launch Attribute      Value                                                                                                                   
+--------------------- ------------------------------------------------------------------------------------------------------------------------
+Profiler Command Line /usr/local/cuda-12.8/bin/../nsight-compute-2025.1.1/target/linux-desktop-glibc_2_11_3-x64/ncu --target-processes all --s
+                      et full -o /home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/profiles/triton_iterations/it
+                      er_02_pipeline/iter_02_pipeline_ncu /usr/bin/python3 /home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compil
+                      er-mlir/scripts/triton_linear_relu_bench.py --case /home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler
+                      -mlir/perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json --config /home/ql/code/ai-compiler-learning/projects/mini
+                      -ai-compiler/compiler-mlir/perf/configs/triton_linear_relu_a10.json --config-source profile_target --warmup 1 --repeat 2
+                       --device-index 0 --json-output /home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/profiles
+                      /triton_iterations/iter_02_pipeline/iter_02_pipeline_bench.json --emit-nvtx --BLOCK_M 128 --BLOCK_N 128 --BLOCK_K 32 --G
+                      ROUP_M 4 --num-warps 8 --num-stages 3                                                                                   
+
+Session Info
+--------------------- -------------------------------------------------------
+Session Attribute     Value                                                  
+--------------------- -------------------------------------------------------
+Created               2026-Jun-11 21:53:00                                   
+Host Name             iZ2zej4wywqz72bdl6s33kZ                                
+Host OS               Linux - #183-Ubuntu SMP Fri Mar 6 13:29:34 UTC 2026    
+Host Architecture     x86_64                                                 
+Host Processor        Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz          
+Target Name           iZ2zej4wywqz72bdl6s33kZ                                
+Target IP Addresses   172.21.17.30, 172.17.0.1, fe80::216:3eff:fe40:ac2b%eth0
+Target OS             Linux - #183-Ubuntu SMP Fri Mar 6 13:29:34 UTC 2026    
+Target Architecture   x86_64                                                 
+Target Processor      Intel(R) Xeon(R) Platinum 8369B CPU @ 2.90GHz          
+CUDA Version          13.0                                                   
+PerfWorks             0.1.0                                                  
+Nsight Compute Target 2025.1.1.0 (build 35528883) (public-release)           
+
+Processes
+---------- -------------------
+Process Id Process Name       
+---------- -------------------
+9212       /usr/bin/python3.10
+
+Device Attributes
+--------------------------- -----------
+Device Attribute            Device 0   
+--------------------------- -----------
+confidential_computing_mode No-CC      
+multiprocessor_count        72         
+display_name                NVIDIA A10 
+compute_capability_major    8          
+compute_capability_minor    6          
+total_memory                23684841472

@@ -1,0 +1,74 @@
+{
+  "case": {
+    "name": "triton_linear_relu_f32_m1024_n1024_k1024",
+    "description": "Triton fused linear+relu main A10 benchmark case.",
+    "operation": "fused_linear_relu",
+    "dtype": "float32",
+    "problem": {
+      "m": 1024,
+      "n": 1024,
+      "k": 1024
+    },
+    "data_profile": "gaussian",
+    "seed": 0,
+    "layout": {
+      "input": "row_major_mk",
+      "weight": "row_major_nk",
+      "output": "row_major_mn"
+    }
+  },
+  "run": {
+    "warmup": 1,
+    "repeat": 2,
+    "config_source": "profile_target",
+    "config_tag": "bm128_bn128_bk32_gm4_w8_s3"
+  },
+  "device": "NVIDIA A10 (sm_86)",
+  "config": {
+    "BLOCK_M": 128,
+    "BLOCK_N": 128,
+    "BLOCK_K": 32,
+    "GROUP_M": 4,
+    "num_warps": 8,
+    "num_stages": 3
+  },
+  "metrics": {
+    "kernel_ms": {
+      "source": "cuda_event",
+      "min": 0.2908160090446472,
+      "mean": 0.29708799719810486,
+      "median": 0.29708799719810486,
+      "max": 0.3033599853515625,
+      "timings_ms": [
+        0.3033599853515625,
+        0.2908160090446472
+      ]
+    },
+    "invoke_ms": {
+      "source": "host_wall",
+      "min": 0.3256229999806237,
+      "mean": 0.36984699988806824,
+      "median": 0.36984699988806824,
+      "max": 0.41407099979551276,
+      "timings_ms": [
+        0.41407099979551276,
+        0.3256229999806237
+      ]
+    },
+    "effective_gflops": {
+      "value": 7235.502007058911,
+      "unit": "GFLOP/s"
+    },
+    "effective_gbps": {
+      "value": 42.36794525093756,
+      "unit": "GB/s"
+    }
+  },
+  "correctness": {
+    "correct": true,
+    "max_abs_err": 0.0,
+    "max_rel_err": 0.0,
+    "abs_tol": 0.0005,
+    "rel_tol": 0.0005
+  }
+}

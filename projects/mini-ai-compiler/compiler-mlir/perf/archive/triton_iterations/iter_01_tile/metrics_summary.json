@@ -1,0 +1,120 @@
+{
+  "iteration_kind": "sweep",
+  "candidate_count": 144,
+  "failed_candidate_count": 24,
+  "best_config": {
+    "BLOCK_M": 128,
+    "BLOCK_N": 128,
+    "BLOCK_K": 32,
+    "GROUP_M": 4,
+    "num_warps": 8,
+    "num_stages": 3
+  },
+  "best_config_tag": "bm128_bn128_bk32_gm4_w8_s3",
+  "best_kernel_ms_median": 0.2549760043621063,
+  "best_invoke_ms_median": 0.27083949998996104,
+  "speedup_vs_baseline": 1.622489896938546,
+  "top_ranked": [
+    {
+      "config": {
+        "BLOCK_M": 128,
+        "BLOCK_N": 128,
+        "BLOCK_K": 32,
+        "GROUP_M": 4,
+        "num_warps": 8,
+        "num_stages": 3
+      },
+      "config_tag": "bm128_bn128_bk32_gm4_w8_s3",
+      "kernel_ms_median": 0.2549760043621063,
+      "invoke_ms_median": 0.27083949998996104,
+      "correct": true,
+      "json_path": "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/runs/triton_iterations/iter_01_tile/115_bm128_bn128_bk32_gm4_w8_s3.json"
+    },
+    {
+      "config": {
+        "BLOCK_M": 128,
+        "BLOCK_N": 128,
+        "BLOCK_K": 32,
+        "GROUP_M": 8,
+        "num_warps": 8,
+        "num_stages": 3
+      },
+      "config_tag": "bm128_bn128_bk32_gm8_w8_s3",
+      "kernel_ms_median": 0.2549760043621063,
+      "invoke_ms_median": 0.27112399999396075,
+      "correct": true,
+      "json_path": "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/runs/triton_iterations/iter_01_tile/124_bm128_bn128_bk32_gm8_w8_s3.json"
+    },
+    {
+      "config": {
+        "BLOCK_M": 128,
+        "BLOCK_N": 128,
+        "BLOCK_K": 32,
+        "GROUP_M": 8,
+        "num_warps": 8,
+        "num_stages": 4
+      },
+      "config_tag": "bm128_bn128_bk32_gm8_w8_s4",
+      "kernel_ms_median": 0.2549760043621063,
+      "invoke_ms_median": 0.27097600002434774,
+      "correct": true,
+      "json_path": "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/runs/triton_iterations/iter_01_tile/125_bm128_bn128_bk32_gm8_w8_s4.json"
+    },
+    {
+      "config": {
+        "BLOCK_M": 128,
+        "BLOCK_N": 128,
+        "BLOCK_K": 32,
+        "GROUP_M": 4,
+        "num_warps": 8,
+        "num_stages": 4
+      },
+      "config_tag": "bm128_bn128_bk32_gm4_w8_s4",
+      "kernel_ms_median": 0.25600001215934753,
+      "invoke_ms_median": 0.27315350001799743,
+      "correct": true,
+      "json_path": "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/runs/triton_iterations/iter_01_tile/116_bm128_bn128_bk32_gm4_w8_s4.json"
+    },
+    {
+      "config": {
+        "BLOCK_M": 128,
+        "BLOCK_N": 128,
+        "BLOCK_K": 64,
+        "GROUP_M": 4,
+        "num_warps": 8,
+        "num_stages": 2
+      },
+      "config_tag": "bm128_bn128_bk64_gm4_w8_s2",
+      "kernel_ms_median": 0.2662400007247925,
+      "invoke_ms_median": 0.28209350000452105,
+      "correct": true,
+      "json_path": "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/runs/triton_iterations/iter_01_tile/132_bm128_bn128_bk64_gm4_w8_s2.json"
+    }
+  ],
+  "failed_config_tags": [
+    "bm64_bn128_bk64_gm4_w2_s4",
+    "bm64_bn128_bk64_gm4_w4_s4",
+    "bm64_bn128_bk64_gm4_w8_s4",
+    "bm64_bn128_bk64_gm8_w2_s4",
+    "bm64_bn128_bk64_gm8_w4_s4",
+    "bm64_bn128_bk64_gm8_w8_s4",
+    "bm128_bn64_bk64_gm4_w2_s4",
+    "bm128_bn64_bk64_gm4_w4_s4",
+    "bm128_bn64_bk64_gm4_w8_s4",
+    "bm128_bn64_bk64_gm8_w2_s4",
+    "bm128_bn64_bk64_gm8_w4_s4",
+    "bm128_bn64_bk64_gm8_w8_s4",
+    "bm128_bn128_bk64_gm4_w2_s3",
+    "bm128_bn128_bk64_gm4_w2_s4",
+    "bm128_bn128_bk64_gm4_w4_s3",
+    "bm128_bn128_bk64_gm4_w4_s4",
+    "bm128_bn128_bk64_gm4_w8_s3",
+    "bm128_bn128_bk64_gm4_w8_s4",
+    "bm128_bn128_bk64_gm8_w2_s3",
+    "bm128_bn128_bk64_gm8_w2_s4",
+    "bm128_bn128_bk64_gm8_w4_s3",
+    "bm128_bn128_bk64_gm8_w4_s4",
+    "bm128_bn128_bk64_gm8_w8_s3",
+    "bm128_bn128_bk64_gm8_w8_s4"
+  ]
+}

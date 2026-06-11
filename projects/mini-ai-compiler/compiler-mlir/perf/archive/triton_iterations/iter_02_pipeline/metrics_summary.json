@@ -1,0 +1,39 @@
+{
+  "iteration_kind": "profile",
+  "config_source": "profile_target",
+  "profiled_bench_kernel_ms_median": 1680.2020874023438,
+  "profiled_bench_invoke_ms_median": 1680.4441424999368,
+  "reference_bench_json": "perf/runs/triton_iterations/iter_01_tile/115_bm128_bn128_bk32_gm4_w8_s3.json",
+  "reference_kernel_ms_median": 0.2549760043621063,
+  "reference_invoke_ms_median": 0.27083949998996104,
+  "nsys_nvtx_ranges": {
+    "prepare": {
+      "time_pct": 99.8,
+      "total_time_ns": 476311283
+    },
+    "warmup": {
+      "time_pct": 0.1,
+      "total_time_ns": 345752
+    },
+    "benchmark": {
+      "time_pct": 0.1,
+      "total_time_ns": 684979
+    }
+  },
+  "ncu_triton_kernel": {
+    "header": "kernel (64, 1, 1)x(256, 1, 1), Context 1, Stream 7, Device 0, CC 8.6",
+    "duration_us": 447.3,
+    "memory_throughput_gbps": 31.53,
+    "l2_hit_rate_pct": 88.25,
+    "no_eligible_pct": 61.96,
+    "registers_per_thread": 236.0,
+    "dynamic_shared_memory_kib": 65.54,
+    "achieved_occupancy_pct": 16.66,
+    "theoretical_occupancy_pct": 16.67,
+    "block_size": 256.0,
+    "grid_size": 64.0,
+    "shared_bank_conflicts": 14680064.0,
+    "shared_bank_conflict_wavefront_pct": 69.89,
+    "short_scoreboard_cycles": 2.4
+  }
+}

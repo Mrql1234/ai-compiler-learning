@@ -1,0 +1,11 @@
+Generating SQLite file /home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/profiles/triton_iterations/iter_02_pipeline_filtered/iter_02_pipeline_filtered_nsys.sqlite from /home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/profiles/triton_iterations/iter_02_pipeline_filtered/iter_02_pipeline_filtered_nsys.nsys-rep
+Processing [/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/profiles/triton_iterations/iter_02_pipeline_filtered/iter_02_pipeline_filtered_nsys.sqlite] with [/usr/local/cuda-12.8/nsight-systems-2024.6.2/host-linux-x64/reports/nvtx_pushpop_sum.py]... 
+
+ ** NVTX Push/Pop Range Summary (nvtx_pushpop_sum):
+
+ Time (%)  Total Time (ns)  Instances   Avg (ns)     Med (ns)    Min (ns)   Max (ns)   StdDev (ns)              Range            
+ --------  ---------------  ---------  -----------  -----------  ---------  ---------  -----------  -----------------------------
+     99.8        474700792          1  474700792.0  474700792.0  474700792  474700792          0.0  :triton_linear_relu/prepare  
+      0.1           683290          1     683290.0     683290.0     683290     683290          0.0  :triton_linear_relu/benchmark
+      0.1           324614          1     324614.0     324614.0     324614     324614          0.0  :triton_linear_relu/warmup   
+

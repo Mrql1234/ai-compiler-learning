@@ -1,0 +1,90 @@
+{
+  "iteration_name": "iter_04_packed_resweep",
+  "kind": "sweep",
+  "created_at_utc": "2026-06-11T14:47:16.297360+00:00",
+  "project_dir": "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir",
+  "git": {
+    "commit": "1cd006c7e1d281d73d9c28bd811264812534bd97",
+    "dirty": true,
+    "status": [
+      " M perf/CLOUD_TRITON_A10_WORKFLOW.md",
+      " M perf/README.md",
+      " M perf/configs/triton_linear_relu_a10.json",
+      " M perf/notes/triton_linear_relu_iterations.md",
+      " M scripts/perf_profile_ncu.sh",
+      " M scripts/triton_linear_relu_bench.py",
+      " M scripts/triton_perf_common.py",
+      " M scripts/triton_perf_sweep.py",
+      " M scripts/triton_profile_iter.py",
+      "?? perf/archive/",
+      "?? perf/profiles/triton_iterations/",
+      "?? perf/runs/triton_iterations/",
+      "?? scripts/triton_archive_iteration.py",
+      "?? scripts/triton_cloud_a10_workflow.sh"
+    ]
+  },
+  "archive_dir": "perf/archive/triton_iterations/iter_04_packed_resweep",
+  "artifacts": [
+    "perf/runs/triton_iterations/iter_04_packed_resweep/sweep_summary.json",
+    "perf/runs/triton_iterations/iter_04_packed_resweep/best_config.json"
+  ],
+  "commands": [
+    [
+      "/usr/bin/python3",
+      "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/scripts/triton_linear_relu_bench.py",
+      "--case",
+      "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json",
+      "--config",
+      "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/configs/triton_linear_relu_a10.json",
+      "--config-source",
+      "default",
+      "--warmup",
+      "10",
+      "--repeat",
+      "50",
+      "--device-index",
+      "0",
+      "--json-output",
+      "/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/runs/triton_iterations/iter_04_packed_resweep/000_bm64_bn64_bk32_gm4_w2_s2.json",
+      "--BLOCK_M",
+      "64",
+      "--BLOCK_N",
+      "64",
+      "--BLOCK_K",
+      "32",
+      "--GROUP_M",
+      "4",
+      "--num-warps",
+      "2",
+      "--num-stages",
+      "2"
+    ]
+  ],
+  "source_snapshot": [
+    {
+      "path": "scripts/triton_linear_relu_bench.py",
+      "snapshot_path": "source_snapshot/scripts/triton_linear_relu_bench.py",
+      "sha256": "9c7e0f2a4d9f0af846b0ccf50c458f26d438414dd21aaf36c3aa5b5af5e79963"
+    },
+    {
+      "path": "scripts/triton_perf_common.py",
+      "snapshot_path": "source_snapshot/scripts/triton_perf_common.py",
+      "sha256": "ae6c83779ae934be440148f47ebfaf935ff552edb2502f2fc95757087de6dd14"
+    },
+    {
+      "path": "scripts/triton_perf_sweep.py",
+      "snapshot_path": "source_snapshot/scripts/triton_perf_sweep.py",
+      "sha256": "f29df3b0439d1cfc0461edc09e71293244f0163573213d312ef2b56e53e59969"
+    },
+    {
+      "path": "perf/configs/triton_linear_relu_a10.json",
+      "snapshot_path": "source_snapshot/perf/configs/triton_linear_relu_a10.json",
+      "sha256": "8d93ca3d1ddedbceaabb1694e5b74d3314066a1f79243fc1ca3244a55ee8d198"
+    },
+    {
+      "path": "perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json",
+      "snapshot_path": "source_snapshot/perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json",
+      "sha256": "3e5f59076350bb05b6810ffaf236a6401c8ce27ec8f74c03c0bf6f79b4608535"
+    }
+  ]
+}

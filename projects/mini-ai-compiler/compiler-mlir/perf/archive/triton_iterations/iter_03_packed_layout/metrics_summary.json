@@ -1,0 +1,42 @@
+{
+  "iteration_kind": "profile",
+  "config_source": "profile_target",
+  "profiled_bench_kernel_ms_median": 0.1929280012845993,
+  "profiled_bench_invoke_ms_median": 0.2661020000687131,
+  "reference_bench_json": "perf/runs/triton_iterations/iter_03_packed_bench.json",
+  "ncu_details_path": "perf/profiles/triton_iterations/iter_03_packed_layout/iter_03_packed_layout_ncu_full_details.txt",
+  "reference_kernel_ms_median": 0.15667200088500977,
+  "reference_invoke_ms_median": 0.17701399997349654,
+  "nsys_nvtx_ranges": {
+    "prepare": {
+      "time_pct": 99.9,
+      "total_time_ns": 475028191
+    },
+    "warmup": {
+      "time_pct": 0.0,
+      "total_time_ns": 227846
+    },
+    "benchmark": {
+      "time_pct": 0.1,
+      "total_time_ns": 476730
+    }
+  },
+  "ncu_triton_kernel": {
+    "header": "kernel (64, 1, 1)x(256, 1, 1), Context 1, Stream 7, Device 0, CC 8.6",
+    "duration_us": 234.75,
+    "memory_throughput_gbps": 58.06,
+    "compute_sm_throughput_pct": 63.95,
+    "l2_hit_rate_pct": 88.23,
+    "no_eligible_pct": 27.01,
+    "eligible_warps_per_scheduler": 1.29,
+    "registers_per_thread": 186.0,
+    "dynamic_shared_memory_kib": 65.54,
+    "achieved_occupancy_pct": 16.66,
+    "theoretical_occupancy_pct": 16.67,
+    "block_size": 256.0,
+    "grid_size": 64.0,
+    "shared_bank_conflicts": null,
+    "shared_bank_conflict_wavefront_pct": null,
+    "short_scoreboard_cycles": null
+  }
+}

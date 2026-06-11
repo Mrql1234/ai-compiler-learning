@@ -1,0 +1,22 @@
+{
+  "name": "triton_linear_relu_f32_m1024_n1024_k1024",
+  "description": "Triton fused linear+relu main A10 benchmark case.",
+  "operation": "fused_linear_relu",
+  "dtype": "float32",
+  "problem": {
+    "m": 1024,
+    "n": 1024,
+    "k": 1024
+  },
+  "layout": {
+    "input": "row_major_mk",
+    "weight": "row_major_nk",
+    "output": "row_major_mn"
+  },
+  "data_profile": "gaussian",
+  "seed": 0,
+  "tolerance": {
+    "abs": 0.0005,
+    "rel": 0.0005
+  }
+}

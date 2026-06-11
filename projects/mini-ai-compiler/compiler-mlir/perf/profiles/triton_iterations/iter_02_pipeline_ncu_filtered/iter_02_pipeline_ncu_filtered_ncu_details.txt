@@ -1,0 +1,2 @@
+==ERROR== Could not open report file '/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/profiles/triton_iterations/iter_02_pipeline_ncu_filtered/iter_02_pipeline_ncu_filtered_ncu.ncu-rep'.
+==ERROR== The file does not exist or is not a regular file.
