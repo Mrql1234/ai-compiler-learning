@@ -160,6 +160,23 @@ Python 侧必须作为前端桥接层和验证层，而不是未来唯一编译�
   - lowering plan 或后端中间产物
 - 优化前后 IR 必须可对照。
 
+### R10. Triton Operator Agent Prototype
+系统应提供一个面向 Triton 的算子开发与自动迭代优化 Agent 原型，统一承载算子规格、候选生成、验证、benchmark、profiling 诊断与经验记忆。
+
+**Acceptance criteria:**
+- 必须支持结构化规格输入，至少覆盖：
+  - `fused_linear_relu`
+  - `matmul`
+  - `softmax`
+  - `layernorm`
+- 必须存在统一入口脚本，能够支持：
+  - `plan`
+  - `tune`
+  - `analyze`
+- `fused_linear_relu` 必须接入现有 Triton benchmark / profile 工作流，形成可执行闭环。
+- `matmul`、`softmax`、`layernorm` 至少要具备统一规格建模、候选空间生成和 Nsight 指标解释能力。
+- Agent 必须把每次运行的 summary、report 和最优配置持久化，形成最小经验记忆。
+
 ## Recommended Project Structure Requirements
 项目结构应采用双轨布局：
 
@@ -242,6 +259,19 @@ Python 侧必须作为前端桥接层和验证层，而不是未来唯一编译�
 
 **交付：**
 - 双轨统一验证入口
+
+### Phase H: Triton 算子 Agent 原型
+**目标：**
+- 建立结构化算子规格
+- 搭建统一的 Triton Agent 入口
+- 接入 benchmark / profiling / Nsight 诊断
+- 沉淀可复用的经验记忆
+
+**交付：**
+- `scripts/triton_operator_agent.py`
+- `scripts/triton_operator_agent_lib.py`
+- `perf/specs/` 规格样例
+- `summary.json` / `report.md` / `analysis.json` 产物规范
 
 ## Open Questions
 - bridge format 第一版最终选择纯 MLIR 文本，还是保留一个结构化中间层？

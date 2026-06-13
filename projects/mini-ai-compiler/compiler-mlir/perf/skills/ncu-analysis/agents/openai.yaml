@@ -1,0 +1,4 @@
+interface:
+  display_name: "NCU Analysis"
+  short_description: "Interpret Nsight Compute results for Triton kernels"
+  default_prompt: "Use $ncu-analysis to analyze Nsight Compute results for a Triton kernel and suggest the next optimization steps."

@@ -4,3 +4,7 @@ __pycache__/
 artifacts/
 compiler-mlir/build/
 compiler-mlir/compile_commands.json
+compiler-mlir/perf/agent_memory/
+compiler-mlir/perf/runs/agent_runs/
+compiler-mlir/perf/profiles/triton_iterations/dry_run_*/
+compiler-mlir/perf/runs/triton_iterations/dry_run_*/

@@ -1,0 +1,50 @@
+{
+  "name": "triton_agent_matmul_a10",
+  "operation": "matmul",
+  "dtype": "float32",
+  "problem": {
+    "m": 1024,
+    "n": 1024,
+    "k": 1024
+  },
+  "layout": {
+    "lhs": "row_major_mk",
+    "rhs": "row_major_kn",
+    "output": "row_major_mn"
+  },
+  "hardware": {
+    "gpu": "nvidia_a10",
+    "sm": "sm_86",
+    "shared_memory_kib": 100,
+    "tensor_core": false
+  },
+  "constraints": {
+    "abs_tol": 0.0005,
+    "rel_tol": 0.0005,
+    "allow_approx": false
+  },
+  "budgets": {
+    "max_candidates": 6,
+    "max_iterations": 2,
+    "warmup": 10,
+    "repeat": 50,
+    "profile_top_k": 1
+  },
+  "artifacts": {},
+  "candidate_space": {
+    "BLOCK_M": [64, 128],
+    "BLOCK_N": [64, 128],
+    "BLOCK_K": [32, 64],
+    "GROUP_M": [4, 8],
+    "num_warps": [2, 4, 8],
+    "num_stages": [2, 3, 4]
+  },
+  "goals": {
+    "primary": "throughput",
+    "secondary": ["correctness", "latency"]
+  },
+  "notes": [
+    "当前原型会为 matmul 生成候选配置和优化建议，但还没有接入独立可执行 Triton matmul benchmark。",
+    "后续可以在 scripts 下新增 triton_matmul_bench.py 后直接复用这套 Agent 外壳。"
+  ]
+}

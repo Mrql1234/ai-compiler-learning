@@ -314,6 +314,59 @@ python3 ./scripts/perf_compare.py \
 5. `perf/notes/README.md`
 6. `perf/CLOUD_TRITON_A10_WORKFLOW.md`
 
+## Triton 算子 Agent 原型
+
+为了把“算子需求解析 -> kernel 候选生成 -> benchmark / profiling -> 反馈驱动 resweep”做成统一入口，当前新增了一套 Triton-first Agent 原型。
+
+入口文件：
+
+- `scripts/triton_operator_agent.py`
+- `scripts/triton_operator_agent_lib.py`
+- `perf/specs/triton_agent_fused_linear_relu_a10.json`
+- `perf/specs/triton_agent_matmul_a10.json`
+- `perf/specs/triton_agent_softmax_a10.json`
+- `perf/specs/triton_agent_layernorm_a10.json`
+
+当前覆盖范围：
+
+- `fused_linear_relu`
+  - 已接入可执行的 Triton benchmark / profile 流程
+  - 适合做完整闭环演示
+- `matmul`、`softmax`、`layernorm`
+  - 已接入统一规格描述、候选生成、经验记忆和 Nsight 诊断接口
+  - 当前还是 planner-only 原型
+
+常用命令：
+
+```bash
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode plan \
+  --dry-run
+
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode tune \
+  --dry-run \
+  --max-candidates 4 \
+  --max-iterations 1
+
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_matmul_a10.json \
+  --mode plan \
+  --dry-run
+```
+
+如果已经采集到了 Nsight Compute 文本，可以单独做瓶颈分析：
+
+```bash
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode analyze \
+  --ncu-details /path/to/iter_best_ncu_details.txt \
+  --run-dir perf/runs/agent_runs/analyze_linear_relu
+```
+
 Translate the LLVM dialect output into textual LLVM IR:
 
 ```bash

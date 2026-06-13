@@ -15,6 +15,8 @@
 - [`LARGE_MODEL_GPU_DESIGN.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/LARGE_MODEL_GPU_DESIGN.md)
 - [`LOWERING_ROADMAP.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/LOWERING_ROADMAP.md)
 - [`CLOUD_TRITON_A10_WORKFLOW.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/CLOUD_TRITON_A10_WORKFLOW.md)
+- [`TRITON_OPERATOR_AGENT_SPEC.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/TRITON_OPERATOR_AGENT_SPEC.md)
+- [`CODEX_SKILLS_MIGRATION.md`](/home/ql/code/ai-compiler-learning/projects/mini-ai-compiler/compiler-mlir/perf/CODEX_SKILLS_MIGRATION.md)
 
 ## 当前状态
 
@@ -74,6 +76,10 @@
   - 云端 A10 的 Triton 迭代工作流入口
 - `scripts/triton_archive_iteration.py`
   - Triton 每轮归档入口，生成 manifest / metrics summary / analysis / source snapshot
+- `scripts/triton_operator_agent.py`
+  - Triton 算子开发与自动迭代优化 Agent 统一入口
+- `scripts/triton_operator_agent_lib.py`
+  - Agent 的规格解析、候选生成、诊断和经验记忆公共库
 - `perf/cases/triton_linear_relu_f32_m128_n128_k128.json`
   - Triton 小型 smoke case
 - `perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json`
@@ -88,6 +94,22 @@
   - Triton `fused_linear_relu` 迭代记录模板
 - `perf/CLOUD_TRITON_A10_WORKFLOW.md`
   - 云端 A10 必做事项与命令
+- `perf/specs/triton_agent_fused_linear_relu_a10.json`
+  - `fused_linear_relu` 的 Agent 规格样例
+- `perf/specs/triton_agent_matmul_a10.json`
+  - `matmul` 的 Agent 规格样例
+- `perf/specs/triton_agent_softmax_a10.json`
+  - `softmax` 的 Agent 规格样例
+- `perf/specs/triton_agent_layernorm_a10.json`
+  - `layernorm` 的 Agent 规格样例
+- `perf/TRITON_OPERATOR_AGENT_SPEC.md`
+  - Agent 的整合规格文档
+- `perf/CODEX_SKILLS_MIGRATION.md`
+  - 云主机迁移 skill 的说明文档
+- `perf/skills/ncu-analysis/`
+  - vendored 的 `ncu-analysis` skill
+- `perf/skills/install_ncu_analysis_skill.sh`
+  - 把 vendored skill 安装到 `~/.codex/skills/` 的脚本
 
 ## 当前可执行命令
 
@@ -301,6 +323,68 @@ python3 ./scripts/triton_archive_iteration.py \
 - `perf/archive/triton_iterations/<iteration>/metrics_summary.json`
 - `perf/archive/triton_iterations/<iteration>/analysis.md`
 - `perf/archive/triton_iterations/<iteration>/source_snapshot/`
+
+## Triton Agent 原型入口
+
+这个 Agent 原型把现有的 Triton benchmark、sweep、profile 和 Nsight 分析能力统一到“结构化规格驱动”的工作流里。
+
+当前模式：
+
+- `plan`
+  - 解析算子规格，生成候选配置和实验计划
+- `tune`
+  - 执行候选、汇总结果，并在可用时触发 profile-guided resweep
+- `analyze`
+  - 直接消费已有的 `ncu --page details` 文本并输出瓶颈分类和下一轮实验建议
+
+当前覆盖：
+
+- `fused_linear_relu`
+  - 可执行 Triton 路径
+- `matmul`、`softmax`、`layernorm`
+  - planner-only 原型，先统一规格与搜索接口
+
+推荐命令：
+
+```bash
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode plan \
+  --dry-run
+```
+
+```bash
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode tune \
+  --dry-run \
+  --max-candidates 4 \
+  --max-iterations 1
+```
+
+```bash
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_matmul_a10.json \
+  --mode plan \
+  --dry-run
+```
+
+```bash
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode analyze \
+  --ncu-details /path/to/iter_best_ncu_details.txt \
+  --run-dir perf/runs/agent_runs/analyze_linear_relu
+```
+
+运行产物默认会落到：
+
+- `perf/runs/agent_runs/<spec_name>/plan.json`
+- `perf/runs/agent_runs/<spec_name>/summary.json`
+- `perf/runs/agent_runs/<spec_name>/best_result.json`
+- `perf/runs/agent_runs/<spec_name>/analysis.json`
+- `perf/runs/agent_runs/<spec_name>/report.md`
+- `perf/agent_memory/triton_operator_history.json`
 
 ## 已归档数据
 

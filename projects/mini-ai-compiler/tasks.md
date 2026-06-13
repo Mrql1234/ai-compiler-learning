@@ -55,3 +55,14 @@
 - [ ] G2. 对照 eager / Python reference / MLIR backend
 - [ ] G3. 统一 benchmark 入口
 - [ ] G4. 统一 artifact dump 入口
+
+## Phase H：Triton 算子 Agent 原型
+
+- [x] H1. 设计结构化算子规格，统一描述 `operation / shape / dtype / layout / hardware / budget`
+- [x] H2. 新增 `scripts/triton_operator_agent.py` 统一入口，支持 `plan` / `tune` / `analyze`
+- [x] H3. 新增 `scripts/triton_operator_agent_lib.py`，抽象候选生成、命令编排、诊断和经验记忆
+- [x] H4. 打通 `fused_linear_relu` 到现有 Triton benchmark / profile 流程
+- [x] H5. 为 `matmul` / `softmax` / `layernorm` 建立统一 spec 与 planner-only 原型
+- [x] H6. 新增 `perf/specs/` 样例规格与 README 运行命令说明
+- [x] H7. 新增 Python 单测，覆盖 plan、dry-run tune 和 NCU 诊断逻辑
+- [ ] H8. 为 `matmul` 接入独立 Triton benchmark，实现第二个可执行闭环

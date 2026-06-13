@@ -1,0 +1,53 @@
+{
+  "name": "triton_agent_fused_linear_relu_a10",
+  "operation": "fused_linear_relu",
+  "dtype": "float32",
+  "problem": {
+    "m": 1024,
+    "n": 1024,
+    "k": 1024
+  },
+  "layout": {
+    "input": "row_major_mk",
+    "weight": "row_major_nk",
+    "output": "row_major_mn"
+  },
+  "hardware": {
+    "gpu": "nvidia_a10",
+    "sm": "sm_86",
+    "shared_memory_kib": 100,
+    "tensor_core": false
+  },
+  "constraints": {
+    "abs_tol": 0.0005,
+    "rel_tol": 0.0005,
+    "allow_approx": false
+  },
+  "budgets": {
+    "max_candidates": 8,
+    "max_iterations": 2,
+    "warmup": 10,
+    "repeat": 50,
+    "profile_top_k": 1
+  },
+  "artifacts": {
+    "case": "perf/cases/triton_linear_relu_f32_m1024_n1024_k1024.json",
+    "config": "perf/configs/triton_linear_relu_a10.json"
+  },
+  "candidate_space": {
+    "BLOCK_M": [64, 128],
+    "BLOCK_N": [64, 128],
+    "BLOCK_K": [32, 64],
+    "GROUP_M": [4, 8],
+    "num_warps": [2, 4, 8],
+    "num_stages": [2, 3, 4]
+  },
+  "goals": {
+    "primary": "latency",
+    "secondary": ["correctness", "throughput"]
+  },
+  "notes": [
+    "这是当前仓库里可直接复用 benchmark 和 profiling 脚本的主入口。",
+    "适合演示规格解析、候选生成、正确性校验、benchmark、profile-guided resweep 的完整闭环。"
+  ]
+}

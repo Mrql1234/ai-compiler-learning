@@ -193,6 +193,49 @@ Python 继续承担统一验证层角色。
 - 收集结果
 - 对照 eager/reference 输出
 
+### 6.1 Triton 算子 Agent 原型
+在 `compiler-mlir/perf` 这条性能主线上，新增一个“结构化规格驱动”的 Triton 算子 Agent 原型，用于把已有的 benchmark、sweep、profile 和 Nsight 分析能力收敛成统一闭环。
+
+这一层的职责是：
+
+- 接收结构化算子规格
+  - 算子语义
+  - shape / dtype / layout
+  - 硬件约束
+  - 搜索预算
+- 选择合适的算子适配器
+  - `fused_linear_relu`
+  - `matmul`
+  - `softmax`
+  - `layernorm`
+- 生成初始候选配置
+- 调用已有 benchmark / profile 脚本
+- 解析 Nsight Compute 文本并做瓶颈分类
+- 生成下一轮小步实验建议
+- 把 summary / report / best result 记入经验记忆
+
+当前设计采用“统一外壳 + 算子适配器”的方式：
+
+- `scripts/triton_operator_agent.py`
+  - CLI 入口
+  - 提供 `plan` / `tune` / `analyze` 三种模式
+- `scripts/triton_operator_agent_lib.py`
+  - 规格解析
+  - 候选生成
+  - Triton benchmark / profile 命令编排
+  - NCU 文本解析与实验建议
+  - 经验记忆落盘
+
+当前执行能力分层如下：
+
+- `fused_linear_relu`
+  - 直接复用 `triton_linear_relu_bench.py` 与 `triton_profile_iter.py`
+  - 可以形成可执行闭环
+- `matmul`、`softmax`、`layernorm`
+  - 先复用统一规格、搜索空间和诊断框架
+  - 当前保持 planner-only 状态
+  - 后续补独立 benchmark 后可直接接入
+
 ## Bridge Format Strategy
 第一版桥接优先采用**文本桥接**。
 
@@ -276,6 +319,13 @@ mini-ai-compiler/
 - Python harness 调用 MLIR 主工程
 - 正确性验证
 - benchmark
+
+### Phase H: Triton 算子 Agent 原型
+- 新增结构化规格目录 `compiler-mlir/perf/specs/`
+- 新增统一入口 `scripts/triton_operator_agent.py`
+- 把 Triton benchmark、profile、诊断与经验记忆统一到一个工作流
+- 先以 `fused_linear_relu` 跑通可执行闭环
+- 再把 `matmul` / `softmax` / `layernorm` 纳入同一套规格与策略框架
 
 ## Notes on Current Repo
 - `projects/mlir-passes/` 是学习与实验资产，不直接等于新主工程。

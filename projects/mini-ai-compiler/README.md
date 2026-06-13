@@ -61,6 +61,62 @@ python -m benchmarks.bench_mlp
 python -m unittest discover -s tests
 ```
 
+## Triton 算子 Agent 原型
+
+`compiler-mlir/perf` 现在新增了一套“面向 Triton 的算子开发与自动迭代优化 Agent 原型”，目标是把下面这条闭环固化成统一入口：
+
+`结构化算子规格 -> 候选配置生成 -> 正确性/benchmark -> profiling 诊断 -> 下一轮优化建议`
+
+当前状态：
+
+- `fused_linear_relu`
+  - 已接入可执行的 Triton benchmark / profile 工作流
+  - 可用 `plan` / `tune` / `analyze` 三种模式
+- `matmul`、`softmax`、`layernorm`
+  - 已接入统一规格解析、候选配置生成、经验记忆和 Nsight 诊断接口
+  - 当前仍属于 `planner-only` 原型，后续可继续补独立 benchmark
+
+主要入口文件：
+
+- `projects/mini-ai-compiler/compiler-mlir/scripts/triton_operator_agent.py`
+- `projects/mini-ai-compiler/compiler-mlir/scripts/triton_operator_agent_lib.py`
+- `projects/mini-ai-compiler/compiler-mlir/perf/specs/`
+
+常用命令：
+
+```bash
+cd projects/mini-ai-compiler/compiler-mlir
+
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode plan \
+  --dry-run
+
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode tune \
+  --dry-run \
+  --max-candidates 4 \
+  --max-iterations 1
+
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_matmul_a10.json \
+  --mode plan \
+  --dry-run
+```
+
+如果已经有 `ncu --page details` 导出的文本，也可以单独走诊断模式：
+
+```bash
+cd projects/mini-ai-compiler/compiler-mlir
+
+python3 ./scripts/triton_operator_agent.py \
+  --spec perf/specs/triton_agent_fused_linear_relu_a10.json \
+  --mode analyze \
+  --ncu-details /path/to/iter_best_ncu_details.txt \
+  --run-dir perf/runs/agent_runs/analyze_linear_relu
+```
+
 ## MLIR Subproject
 
 The `compiler-mlir/` directory is the formal compiler track.
