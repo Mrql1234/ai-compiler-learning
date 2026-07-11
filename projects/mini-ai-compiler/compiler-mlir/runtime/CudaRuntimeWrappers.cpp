@@ -72,6 +72,47 @@ extern "C" MINI_CUDA_WRAPPERS_EXPORT void mgpuSetDefaultDevice(int32_t device) {
   defaultDevice = device;
 }
 
+extern "C" MINI_CUDA_WRAPPERS_EXPORT int32_t
+miniDetectDefaultGpuChip(char *buffer, size_t bufferSize) {
+  if (!buffer || bufferSize == 0)
+    return 0;
+  buffer[0] = '\0';
+
+  CUresult result = cuInit(0);
+  if (result != CUDA_SUCCESS) {
+    CUDA_REPORT_IF_ERROR(result);
+    return 0;
+  }
+
+  CUdevice device = 0;
+  result = cuDeviceGet(&device, defaultDevice);
+  if (result != CUDA_SUCCESS) {
+    CUDA_REPORT_IF_ERROR(result);
+    return 0;
+  }
+
+  int major = 0;
+  int minor = 0;
+  result = cuDeviceGetAttribute(&major,
+                                CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+                                device);
+  if (result != CUDA_SUCCESS) {
+    CUDA_REPORT_IF_ERROR(result);
+    return 0;
+  }
+  result = cuDeviceGetAttribute(&minor,
+                                CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+                                device);
+  if (result != CUDA_SUCCESS) {
+    CUDA_REPORT_IF_ERROR(result);
+    return 0;
+  }
+
+  int written =
+      std::snprintf(buffer, bufferSize, "sm_%d%d", major, minor);
+  return written > 0 && static_cast<size_t>(written) < bufferSize;
+}
+
 extern "C" MINI_CUDA_WRAPPERS_EXPORT void miniPerfResetKernelTimings() {
   kernelTimingsMs.clear();
 }

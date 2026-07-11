@@ -20,6 +20,20 @@ resolve_llvm_mlir_build() {
   return 1
 }
 
+resolve_gpu_chip() {
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local compute_cap
+  compute_cap="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n 1 | tr -d '.[:space:]')"
+  if [[ -z "${compute_cap}" ]]; then
+    return 1
+  fi
+
+  printf 'sm_%s\n' "${compute_cap}"
+}
+
 if [[ -z "${LLVM_MLIR_BUILD}" ]]; then
   if ! LLVM_MLIR_BUILD="$(resolve_llvm_mlir_build)"; then
     cat >&2 <<EOF
@@ -60,7 +74,7 @@ if ! grep -q '^LLVM_TARGETS_TO_BUILD:STRING=.*NVPTX' "${LLVM_CACHE}"; then
   cat >&2 <<'EOF'
 [preflight] NVPTX backend is not present in this LLVM build.
 
-On the cloud A10 machine, rebuild LLVM with NVPTX enabled, e.g.:
+Rebuild LLVM with NVPTX enabled, e.g.:
 
   -DLLVM_TARGETS_TO_BUILD="host;NVPTX"
 
@@ -72,14 +86,17 @@ fi
 if command -v nvidia-smi >/dev/null 2>&1; then
   echo "[preflight] GPU inventory:"
   nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+  if GPU_CHIP="$(resolve_gpu_chip)"; then
+    echo "[preflight] detected default gpu chip: ${GPU_CHIP}"
+  fi
 else
   echo "[preflight] nvidia-smi not found; this is acceptable on the local no-GPU machine."
 fi
 
 cat <<'EOF'
-[preflight] A10 NVVM toolchain checks passed.
+[preflight] GPU NVVM toolchain checks passed.
 
 Recommended next step:
 
-  ./scripts/a10_lower_to_nvvm.sh test/gpu_prep.mlir
+  ./scripts/a10_lower_to_nvvm.sh test/gpu_runner_demo.mlir
 EOF

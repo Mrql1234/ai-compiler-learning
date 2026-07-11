@@ -111,6 +111,11 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="Forwarded to the MLIR NVVM lowering pipeline",
     )
+    parser.add_argument(
+        "--gpu-chip",
+        default="",
+        help="Override the gpu_chip declared in the perf case JSON",
+    )
     return parser.parse_args()
 
 
@@ -275,7 +280,6 @@ def run_mlir_backend(
         backend.get("entry_function", case.get("entry_function", "run")),
         f"--entry-point-result={backend.get('result_type', case.get('result_type', 'f32'))}",
         f"--kernel-backend={backend.get('kernel_backend', backend_name)}",
-        f"--gpu-chip={backend.get('gpu_chip', 'sm_86')}",
         f"--cubin-format={backend.get('cubin_format', 'fatbin')}",
         f"--opt-level={backend.get('opt_level', 3)}",
         f"--warmup={args.warmup}",
@@ -283,6 +287,9 @@ def run_mlir_backend(
         f"--json-output={json_path}",
         f"--dump-lowered={lowered_path}",
     ]
+    gpu_chip = args.gpu_chip or backend.get("gpu_chip")
+    if gpu_chip:
+        command.append(f"--gpu-chip={gpu_chip}")
     problem = case.get("problem", {})
     if problem:
         command.extend(

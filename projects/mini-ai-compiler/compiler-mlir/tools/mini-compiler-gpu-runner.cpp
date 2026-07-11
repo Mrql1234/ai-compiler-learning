@@ -130,7 +130,7 @@ struct RunnerOptions {
   std::string resultType = "f32";
   std::string kernelBackend = "generated_nvvm";
   bool quantized = false;
-  std::string gpuChip = "sm_86";
+  std::string gpuChip;
   std::string cubinFormat = "fatbin";
   std::string ptxasCmdOptions;
   std::string jsonOutput;
@@ -150,12 +150,37 @@ static void printUsage(llvm::raw_ostream &os, llvm::StringRef programName) {
      << " <input.mlir> [-e function] [--entry-point-result=f32|void]"
         " [--quantized]"
         " [--kernel-backend=generated_nvvm|mlir_nvvm|cuda_hand|cublas|cutlass]"
-        " [--gpu-chip=sm_86] [--cubin-format=fatbin|isa]"
+        " [--gpu-chip=sm_XX] [--cubin-format=fatbin|isa]"
         " [--ptxas-cmd-options=...] [--opt-level=0..3]"
         " [--problem-operation=linear_relu] [--data-profile=name]"
         " [--m=M] [--n=N] [--k=K]"
         " [--warmup=N] [--repeat=N] [--json-output=path]"
         " [--dump-lowered=path]\n";
+}
+
+static std::string detectGpuChipFromRuntime(const char *runtimePath) {
+#ifndef _WIN32
+  if (!runtimePath || runtimePath[0] == '\0')
+    return {};
+
+  void *handle = dlopen(runtimePath, RTLD_LAZY | RTLD_LOCAL);
+  if (!handle)
+    return {};
+
+  using DetectGpuChipFn = int32_t (*)(char *, size_t);
+  auto detectFn = reinterpret_cast<DetectGpuChipFn>(
+      dlsym(handle, "miniDetectDefaultGpuChip"));
+  if (!detectFn)
+    return {};
+
+  char chipBuffer[32] = {0};
+  if (!detectFn(chipBuffer, sizeof(chipBuffer)))
+    return {};
+  return chipBuffer;
+#else
+  (void)runtimePath;
+  return {};
+#endif
 }
 
 static bool parseNonNegativeInt(llvm::StringRef value,
@@ -651,6 +676,12 @@ int main(int argc, char **argv) {
   bool printedHelp = false;
   if (!parseOptions(argc, argv, runnerOptions, printedHelp))
     return printedHelp ? 0 : 1;
+  if (runnerOptions.gpuChip.empty()) {
+    runnerOptions.gpuChip =
+        detectGpuChipFromRuntime(MINI_CUDA_RUNTIME_WRAPPERS_PATH);
+    if (runnerOptions.gpuChip.empty())
+      runnerOptions.gpuChip = "sm_86";
+  }
 
   if (runnerOptions.kernelBackend == "cutlass") {
     printUnsupportedIntegratedBackend(runnerOptions.kernelBackend);
@@ -743,9 +774,11 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
-  llvm::InitializeNativeTargetAsmParser();
+  llvm::InitializeAllTargetInfos();
+  llvm::InitializeAllTargets();
+  llvm::InitializeAllTargetMCs();
+  llvm::InitializeAllAsmPrinters();
+  llvm::InitializeAllAsmParsers();
 
   registerAllPasses();
 

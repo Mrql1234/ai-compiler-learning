@@ -45,6 +45,95 @@ Notes:
 - `MLIR_DIR` and `LLVM_DIR` should come from the same LLVM/MLIR build
 - a working CUDA driver toolkit is now required for the local GPU runner path
 
+## NVTX 构建说明
+
+- 构建入口文件：
+  - `CMakeLists.txt`
+  - `runtime/CMakeLists.txt`
+  - `tools/CMakeLists.txt`
+- 常用构建命令：
+
+```bash
+cmake -S . -B build \
+  -DMLIR_DIR=/path/to/mlir/lib/cmake/mlir \
+  -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm
+cmake --build build -j2
+```
+
+- 当前项目同时兼容两种 NVTX 形态：
+  - 旧版 CUDA 提供的 `nvToolsExt` 链接库
+  - 新版 CUDA 仅提供 `nvtx3/nvToolsExt.h` 头文件的 header-only 形态
+- 当机器上只有 `nvtx3` 头文件时，构建会自动启用 NVTX 宏，并通过 `libdl` 走运行时动态加载路径，不需要额外安装 `libnvToolsExt.so`
+- 这条路径会影响的可执行入口主要是：
+  - `build/bin/mini-compiler-gpu-runner`
+  - `build/bin/mini-compiler-kernel-bench`
+- 一个最小运行入口示例：
+
+```bash
+./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir
+```
+
+## WSL 本地 GPU 运行说明
+
+- 运行入口文件：
+  - `tools/mini-compiler-gpu-runner.cpp`
+  - `runtime/CudaRuntimeWrappers.cpp`
+  - `runtime/MiniCudaKernelRuntime.cu`
+- 如果要在本机 WSL + NVIDIA GPU 环境直接跑 `generated_nvvm` / `mlir_nvvm` 路线，上游 LLVM/MLIR 构建至少需要：
+  - `LLVM_TARGETS_TO_BUILD=X86;NVPTX`
+  - `MLIR_ENABLE_CUDA_RUNNER=ON`
+- 上游 `build-mlir` 推荐重配置命令：
+
+```bash
+cmake -S /home/q/code/llvm_clang_static_analyzer/llvm \
+  -B /home/q/code/llvm_clang_static_analyzer/build-mlir \
+  -G Ninja \
+  -DLLVM_ENABLE_PROJECTS=mlir \
+  -DLLVM_TARGETS_TO_BUILD='X86;NVPTX' \
+  -DMLIR_ENABLE_CUDA_RUNNER=ON
+```
+
+- 上游推荐补编命令：
+
+```bash
+cmake --build /home/q/code/llvm_clang_static_analyzer/build-mlir -j2 -- \
+  llvm-config llc LLVMNVPTXCodeGen MLIRExecutionEngine \
+  mlir_runner_utils mlir_c_runner_utils mlir_cuda_runtime
+```
+
+- 当前子项目本地重编命令：
+
+```bash
+cmake -S . -B build \
+  -DMLIR_DIR=/home/q/code/llvm_clang_static_analyzer/build-mlir/lib/cmake/mlir \
+  -DLLVM_DIR=/home/q/code/llvm_clang_static_analyzer/build-mlir/lib/cmake/llvm
+cmake --build build -j2
+```
+
+- 本机 WSL GPU 最小验证命令：
+
+```bash
+./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir
+./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir --kernel-backend=mlir_nvvm
+./build/bin/mini-compiler-gpu-runner test/gpu_runner_demo.mlir --kernel-backend=cublas
+```
+
+- 当前 `mini-compiler-gpu-runner` 和 `scripts/a10_lower_to_nvvm.sh` 会优先自动探测本机 GPU 的 `sm_*` 目标；
+  如果你想手动覆盖，仍然可以显式传：
+  - `--gpu-chip=sm_120`
+  - `GPU_CHIP=sm_120 ./scripts/a10_lower_to_nvvm.sh test/gpu_runner_demo.mlir`
+- 本地 GPU 预检 / 产物导出入口文件：
+  - `scripts/a10_preflight.sh`
+  - `scripts/a10_lower_to_nvvm.sh`
+- 如果你在本机跑 `scripts/perf_run.py`，而 case 里仍然写的是云端 A10 的 `sm_86`，可以直接用下面这个参数覆盖：
+  - `--gpu-chip=sm_120`
+- 对应运行命令：
+
+```bash
+./scripts/a10_preflight.sh
+./scripts/a10_lower_to_nvvm.sh test/gpu_runner_demo.mlir
+```
+
 ## Design Notes
 
 - Multi-backend lowering roadmap:
@@ -199,7 +288,7 @@ Preflight the cloud A10 NVVM toolchain:
 Run the staged A10 NVVM lowering pipeline:
 
 ```bash
-./scripts/a10_lower_to_nvvm.sh test/gpu_prep.mlir
+./scripts/a10_lower_to_nvvm.sh test/gpu_runner_demo.mlir
 ```
 
 Run a minimal correctness + performance comparison between the CPU and GPU
@@ -276,6 +365,7 @@ GPU 性能与 Triton 迭代入口：
 
 python3 ./scripts/perf_run.py perf/cases/gpu_runner_demo.json \
   --backend mlir_nvvm \
+  --gpu-chip=sm_120 \
   --backend cublas \
   --metric kernel_ms \
   --warmup 10 \

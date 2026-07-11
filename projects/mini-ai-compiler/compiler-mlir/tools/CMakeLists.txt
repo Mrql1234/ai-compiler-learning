@@ -96,18 +96,18 @@ else()
   )
 endif()
 
-if(MINI_NVTX_LIBRARY)
+if(MINI_NVTX_ENABLED)
   target_compile_definitions(mini-compiler-gpu-runner
     PRIVATE
     MINI_ENABLE_NVTX
   )
   target_include_directories(mini-compiler-gpu-runner
     PRIVATE
-    ${CUDAToolkit_INCLUDE_DIRS}
+    ${MINI_NVTX_INCLUDE_DIR}
   )
   target_link_libraries(mini-compiler-gpu-runner
     PRIVATE
-    ${MINI_NVTX_LIBRARY}
+    ${MINI_NVTX_LINK_LIBS}
   )
 endif()
 
@@ -135,18 +135,18 @@ if(CUDAToolkit_FOUND)
     CUDA_ARCHITECTURES "${MINI_CUDA_ARCHITECTURES}"
   )
 
-  if(MINI_NVTX_LIBRARY)
+  if(MINI_NVTX_ENABLED)
     target_compile_definitions(mini-compiler-kernel-bench
       PRIVATE
       MINI_ENABLE_NVTX
     )
     target_include_directories(mini-compiler-kernel-bench
       PRIVATE
-      ${CUDAToolkit_INCLUDE_DIRS}
+      ${MINI_NVTX_INCLUDE_DIR}
     )
     target_link_libraries(mini-compiler-kernel-bench
       PRIVATE
-      ${MINI_NVTX_LIBRARY}
+      ${MINI_NVTX_LINK_LIBS}
     )
   endif()
 endif()

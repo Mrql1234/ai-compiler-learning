@@ -21,18 +21,18 @@ set_target_properties(MiniCudaRuntimeWrappers PROPERTIES
   CUDA_ARCHITECTURES "${MINI_CUDA_ARCHITECTURES}"
 )
 
-if(MINI_NVTX_LIBRARY)
+if(MINI_NVTX_ENABLED)
   target_compile_definitions(MiniCudaRuntimeWrappers
     PRIVATE
     MINI_ENABLE_NVTX
   )
   target_include_directories(MiniCudaRuntimeWrappers
     PRIVATE
-    ${CUDAToolkit_INCLUDE_DIRS}
+    ${MINI_NVTX_INCLUDE_DIR}
   )
   target_link_libraries(MiniCudaRuntimeWrappers
     PRIVATE
-    ${MINI_NVTX_LIBRARY}
+    ${MINI_NVTX_LINK_LIBS}
   )
 endif()
 
